@@ -1435,7 +1435,9 @@
     "slashSuggestions": "Sugerencias de barra",
     "loadingSlashSuggestions": "Cargando sugerencias…",
     "snippetSuggestion": "Insertar prompt guardado",
-    "snippetSuggestions": "Sugerencias de fragmentos"
+    "snippetSuggestions": "Sugerencias de fragmentos",
+    "conversationIdCopied": "",
+    "copyConversationId": ""
   },
   "chatRooms": {
     "error": {
@@ -2574,7 +2576,10 @@
     "fileHeader": "Archivos",
     "fileMatches": "Archivos coincidentes",
     "taskHeader": "Tareas",
-    "taskMatches": "Tareas coincidentes"
+    "taskMatches": "Tareas coincidentes",
+    "conversationHeader": "",
+    "conversationMatches": "",
+    "untitledConversation": ""
   },
   "git": {
     "addComment": "Add comment",

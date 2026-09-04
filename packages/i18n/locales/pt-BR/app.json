@@ -1445,7 +1445,9 @@
     "slashSuggestions": "Sugestões de barra",
     "loadingSlashSuggestions": "Carregando sugestões…",
     "snippetSuggestion": "Inserir prompt salvo",
-    "snippetSuggestions": "Sugestões de snippets"
+    "snippetSuggestions": "Sugestões de snippets",
+    "conversationIdCopied": "",
+    "copyConversationId": ""
   },
   "chatRooms": {
     "error": {
@@ -2584,7 +2586,10 @@
     "fileHeader": "Arquivos",
     "fileMatches": "Correspondências de arquivo",
     "taskHeader": "Tarefas",
-    "taskMatches": "Correspondências de tarefa"
+    "taskMatches": "Correspondências de tarefa",
+    "conversationHeader": "",
+    "conversationMatches": "",
+    "untitledConversation": ""
   },
   "git": {
     "addComment": "Adicionar comentário",

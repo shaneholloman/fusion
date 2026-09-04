@@ -58,6 +58,10 @@ import {
 import { buildTaskPlannerChatContext, TASK_PLANNER_CHAT_CONTEXT_PROMPT_GUIDANCE } from "./task-planner-chat-context.js";
 import { formatTaskPlannerChatMetrics } from "./task-planner-chat-metrics.js";
 import { emitWorkflowSseEvent, type WorkflowSseEventType } from "./sse.js";
+import {
+  buildConversationReferenceContext,
+  createChatConversationTools,
+} from "./chat-conversation-references.js";
 
 import {
   createFnAgent as engineCreateFnAgent,
@@ -520,6 +524,9 @@ export interface ChatFusionToolsetOptions {
   until operators opt in; enabled sessions still scope fn_memory_search at the backend.
   */
   focus?: string;
+  chatStore?: ChatStore;
+  currentChatSessionId?: string;
+  currentProjectId?: string | null;
 }
 
 const CHAT_MISSION_READ_TOOL_NAMES = new Set(["fn_mission_list", "fn_mission_show"]);
@@ -676,8 +683,30 @@ function createTaskVerificationTools(taskStore: TaskStore, actionGateContext?: A
 }
 
 export async function createChatFusionToolset(options: ChatFusionToolsetOptions): Promise<ChatCustomTool[]> {
-  const { taskStore, agentStore, rootDir, agentId, missionMutationGated = false, actionGateContext, focus } = options;
+  const {
+    taskStore,
+    agentStore,
+    rootDir,
+    agentId,
+    missionMutationGated = false,
+    actionGateContext,
+    focus,
+    chatStore,
+    currentChatSessionId,
+    currentProjectId,
+  } = options;
   const tools: ChatCustomTool[] = [];
+
+  /*
+  FNXC:ChatConversationReferences 2026-09-04-09:58:
+  Cross-conversation read tools require a current Direct chat identity and its store. Room responders and explicitly mentioned-agent responders deliberately omit both, matching the existing Direct-only file-reference context path.
+  */
+  if (chatStore && currentChatSessionId) {
+    tools.push(...createChatConversationTools(chatStore, {
+      currentSessionId: currentChatSessionId,
+      projectId: currentProjectId ?? null,
+    }));
+  }
 
   if (taskStore) {
     const settings = await taskStore.getSettings?.();
@@ -2981,8 +3010,17 @@ export class ChatManager {
         }
       }
 
-      // Resolve #file references in the current message before sending to AI
-      const resolvedContent = await resolveFileReferences(parsedSkillCommands.strippedContent, this.rootDir);
+      // Resolve bounded #file and #chat references in the current message before sending to AI.
+      const fileResolvedContent = await resolveFileReferences(parsedSkillCommands.strippedContent, this.rootDir);
+      const conversationReferenceContext = await buildConversationReferenceContext({
+        chatStore: this.chatStore,
+        content: parsedSkillCommands.strippedContent,
+        currentSessionId: sessionId,
+        currentProjectId: session.projectId ?? null,
+      });
+      const resolvedContent = conversationReferenceContext
+        ? `${fileResolvedContent}\n\n${conversationReferenceContext}`
+        : fileResolvedContent;
 
       const attachmentSummary = attachments && attachments.length > 0
         ? `[User attached: ${attachments
@@ -3150,6 +3188,9 @@ export class ChatManager {
         value is inert and both direct and room chat recall remain whole-project.
         */
         focus: session?.memoryFocus ?? undefined,
+        chatStore: this.chatStore,
+        currentChatSessionId: sessionId,
+        currentProjectId: session?.projectId ?? null,
       });
       const customTools = dedupeChatTools([
         createAskQuestionTool(),

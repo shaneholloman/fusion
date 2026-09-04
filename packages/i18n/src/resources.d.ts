@@ -1276,6 +1276,7 @@ export default interface Resources {
       "contextWindowPendingValue": "— / {{total}}",
       "conversationArchived": "Conversation archived",
       "conversationDeleted": "Conversation deleted",
+      "conversationIdCopied": "Conversation ID copied",
       "conversationName": "Conversation name",
       "conversationRenamed": "Conversation renamed",
       "conversationSearchClose": "Close search",
@@ -1285,6 +1286,7 @@ export default interface Resources {
       "conversationSearchNoMatches": "No matches",
       "conversationSearchPlaceholder": "Find in conversation",
       "conversationSearchPrevious": "Previous match",
+      "copyConversationId": "Copy conversation ID",
       "copyFailed": "Copy failed",
       "copyResponse": "Copy response",
       "create": "Create",
@@ -2599,11 +2601,14 @@ export default interface Resources {
       "wrap": "Wrap"
     },
     "fileMention": {
-      "empty": "No tasks or files found",
+      "conversationHeader": "Conversations",
+      "conversationMatches": "Conversation matches",
+      "empty": "No tasks, conversations, or files found",
       "fileHeader": "Files",
       "fileMatches": "File matches",
       "taskHeader": "Tasks",
-      "taskMatches": "Task matches"
+      "taskMatches": "Task matches",
+      "untitledConversation": "Untitled conversation"
     },
     "fixture": {
       "floatingTaskDetail": "Floating task detail",

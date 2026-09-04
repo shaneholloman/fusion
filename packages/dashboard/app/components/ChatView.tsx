@@ -648,11 +648,17 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
   const [copyFeedbackByMessageId, setCopyFeedbackByMessageId] = useState<Record<string, CopyFeedbackState>>({});
   const { pushNav, removeNav } = useNavigationHistoryContext();
 
-  // File mention state and hook
+  // Hash mention state and hook
   const [, setFileMentionPopupVisible] = useState(false);
   const [fileMentionPosition, setFileMentionPosition] = useState({ top: 0, left: 0 });
+  const mentionConversations = useMemo(
+    () => sessions
+      .filter((session) => session.id !== activeSession?.id)
+      .map((session) => ({ id: session.id, title: session.title ?? null })),
+    [activeSession?.id, sessions],
+  );
 
-  const fileMention = useFileMention({ projectId });
+  const fileMention = useFileMention({ projectId, conversations: mentionConversations });
 
   // Calculate popup position based on caret position in textarea
   const updateFileMentionPosition = useCallback((textarea: HTMLTextAreaElement | null) => {
@@ -2018,6 +2024,11 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
           const item = fileMention.combinedItems[fileMention.selectedIndex];
           if (item?.kind === "task") {
             insertHashMention(fileMention.selectTask(item.task, messageInput), `#${item.task.id}`);
+          } else if (item?.kind === "conversation") {
+            insertHashMention(
+              fileMention.selectConversation(item.conversation, messageInput),
+              `#${item.conversation.id}`,
+            );
           } else if (item?.kind === "file") {
             insertHashMention(fileMention.selectFile(item.file, messageInput), `#${item.file.path}`);
           }
@@ -2754,6 +2765,20 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     setCopyFeedback(messageId, copied ? "success" : "error");
   }, [setCopyFeedback]);
 
+  /*
+  FNXC:ChatSidebar 2026-09-04-09:58:
+  A conversation ID is the stable entry point for cross-conversation `#id` references. Keep copying in the shared right-click and three-dot menu so desktop and compact touch layouts expose the same action without adding row chrome.
+  */
+  const handleCopySessionId = useCallback(async (sessionId: string) => {
+    const copied = await copyTextToClipboard(sessionId);
+    setContextMenu(null);
+    if (copied) {
+      addToast(t("chat.conversationIdCopied", "Conversation ID copied"));
+    } else {
+      addToast(t("chat.copyFailed", "Copy failed"), "error");
+    }
+  }, [addToast, t]);
+
   const handleQuoteMessage = useCallback((message: ChatMessageInfo) => {
     const senderId = typeof message.metadata?.senderAgentId === "string" ? message.metadata.senderAgentId : undefined;
     const sessionAgent = activeSession?.agentId && activeSession.agentId !== FN_AGENT_ID ? agentsMap.get(activeSession.agentId) : undefined;
@@ -3114,10 +3139,17 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
             visible={fileMention.mentionActive && !mentionPopupVisible}
             position={fileMentionPosition}
             tasks={fileMention.tasks}
+            conversations={fileMention.conversations}
             files={fileMention.files}
             selectedIndex={fileMention.selectedIndex}
             onSelectTask={(task) => {
               insertHashMention(fileMention.selectTask(task, messageInput), `#${task.id}`);
+            }}
+            onSelectConversation={(conversation) => {
+              insertHashMention(
+                fileMention.selectConversation(conversation, messageInput),
+                `#${conversation.id}`,
+              );
             }}
             onSelectFile={(file) => {
               insertHashMention(fileMention.selectFile(file, messageInput), `#${file.path}`);
@@ -3458,6 +3490,15 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
               {t("chat.openInNewWindow", "Open in new window")}
             </button>
           ) : null}
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="chat-context-copy-id"
+            onClick={() => void handleCopySessionId(contextMenu.sessionId)}
+          >
+            <Copy size={14} />
+            {t("chat.copyConversationId", "Copy conversation ID")}
+          </button>
           <button
             onClick={() => handlePin(
               contextMenu.sessionId,

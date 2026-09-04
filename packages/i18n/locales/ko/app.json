@@ -1435,7 +1435,9 @@
     "slashSuggestions": "슬래시 제안",
     "loadingSlashSuggestions": "제안 불러오는 중…",
     "snippetSuggestion": "저장된 프롬프트 삽입",
-    "snippetSuggestions": "스니펫 제안"
+    "snippetSuggestions": "스니펫 제안",
+    "conversationIdCopied": "",
+    "copyConversationId": ""
   },
   "chatRooms": {
     "error": {
@@ -2574,7 +2576,10 @@
     "fileHeader": "파일",
     "fileMatches": "파일 검색 결과",
     "taskHeader": "작업",
-    "taskMatches": "작업 검색 결과"
+    "taskMatches": "작업 검색 결과",
+    "conversationHeader": "",
+    "conversationMatches": "",
+    "untitledConversation": ""
   },
   "git": {
     "addComment": "Add comment",

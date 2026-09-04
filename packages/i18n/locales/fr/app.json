@@ -1435,7 +1435,9 @@
     "slashSuggestions": "Suggestions de barre oblique",
     "loadingSlashSuggestions": "Chargement des suggestions…",
     "snippetSuggestion": "Insérer le prompt enregistré",
-    "snippetSuggestions": "Suggestions d’extraits"
+    "snippetSuggestions": "Suggestions d’extraits",
+    "conversationIdCopied": "ID de la conversation copié",
+    "copyConversationId": "Copier l’ID de la conversation"
   },
   "chatRooms": {
     "error": {
@@ -2570,11 +2572,14 @@
     "wrap": "Retour"
   },
   "fileMention": {
-    "empty": "Aucune tâche ou fichier trouvé",
+    "empty": "Aucune tâche, conversation ou fichier trouvé",
     "fileHeader": "Fichiers",
     "fileMatches": "Fichiers correspondants",
     "taskHeader": "Tâches",
-    "taskMatches": "Tâches correspondantes"
+    "taskMatches": "Tâches correspondantes",
+    "conversationHeader": "Conversations",
+    "conversationMatches": "Conversations correspondantes",
+    "untitledConversation": "Conversation sans titre"
   },
   "git": {
     "addComment": "Add comment",

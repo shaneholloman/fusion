@@ -1269,12 +1269,14 @@
     "openInNewWindow": "Open in new window",
     "conversationArchived": "Conversation archived",
     "conversationDeleted": "Conversation deleted",
+    "conversationIdCopied": "Conversation ID copied",
     "conversationName": "Conversation name",
     "conversationRenamed": "Conversation renamed",
     "contextWindowAria": "Estimated {{used}} of {{total}} context tokens",
     "contextWindowMeasuredAria": "Session context {{used}} of {{total}} tokens ({{percent}}%), provider-reported input and output",
     "contextWindowPendingAria": "Session context unknown until the next reply — {{total}} token window",
     "contextWindowPendingValue": "— / {{total}}",
+    "copyConversationId": "Copy conversation ID",
     "copyFailed": "Copy failed",
     "copyResponse": "Copy response",
     "create": "Create",
@@ -2580,11 +2582,14 @@
     "wrap": "Wrap"
   },
   "fileMention": {
-    "empty": "No tasks or files found",
+    "conversationHeader": "Conversations",
+    "conversationMatches": "Conversation matches",
+    "empty": "No tasks, conversations, or files found",
     "fileHeader": "Files",
     "fileMatches": "File matches",
     "taskHeader": "Tasks",
-    "taskMatches": "Task matches"
+    "taskMatches": "Task matches",
+    "untitledConversation": "Untitled conversation"
   },
   "git": {
     "addComment": "Add comment",

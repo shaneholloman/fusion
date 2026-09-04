@@ -1435,7 +1435,9 @@
     "slashSuggestions": "斜線建議",
     "loadingSlashSuggestions": "正在載入建議…",
     "snippetSuggestion": "插入已儲存的提示詞",
-    "snippetSuggestions": "片段建議"
+    "snippetSuggestions": "片段建議",
+    "conversationIdCopied": "",
+    "copyConversationId": ""
   },
   "chatRooms": {
     "error": {
@@ -2574,7 +2576,10 @@
     "fileHeader": "文件",
     "fileMatches": "匹配的文件",
     "taskHeader": "任務",
-    "taskMatches": "匹配的任務"
+    "taskMatches": "匹配的任務",
+    "conversationHeader": "",
+    "conversationMatches": "",
+    "untitledConversation": ""
   },
   "git": {
     "addComment": "Add comment",

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { TaskStore, AgentStore, MessageStore, Settings } from "@fusion/core";
+import type { TaskStore, AgentStore, ChatStore, MessageStore, Settings } from "@fusion/core";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createChatFusionToolset } from "../chat.js";
 
@@ -12,6 +12,11 @@ const baseTaskStore = () => ({
 } as unknown as TaskStore);
 
 const baseAgentStore = {} as unknown as AgentStore;
+
+const baseChatStore = () => ({
+  getSession: vi.fn(),
+  getMessages: vi.fn(),
+} as unknown as ChatStore);
 
 const baseMessageStore = {} as unknown as MessageStore;
 
@@ -128,6 +133,55 @@ describe("createChatFusionToolset — permission-parity regression", () => {
     expect(names.has("fn_reflect_on_performance")).toBe(false);
     // read-only evaluations tool still present (degrades to ratings-only without a store)
     expect(names.has("fn_read_evaluations")).toBe(true);
+  });
+
+  it("registers conversation read tools only with a store and current Direct session", async () => {
+    const tools = await createChatFusionToolset({
+      rootDir: "/project",
+      chatStore: baseChatStore(),
+      currentChatSessionId: "chat-00000000",
+      currentProjectId: "project-a",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("fn_chat_conversation_read")).toBe(true);
+    expect(names.has("fn_chat_conversation_search")).toBe(true);
+  });
+
+  it("withholds conversation tools when the chat store is absent", async () => {
+    const tools = await createChatFusionToolset({
+      rootDir: "/project",
+      currentChatSessionId: "chat-00000000",
+      currentProjectId: "project-a",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("fn_chat_conversation_read")).toBe(false);
+    expect(names.has("fn_chat_conversation_search")).toBe(false);
+  });
+
+  it("withholds conversation tools when the current session identity is absent", async () => {
+    const tools = await createChatFusionToolset({
+      rootDir: "/project",
+      chatStore: baseChatStore(),
+      currentProjectId: "project-a",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("fn_chat_conversation_read")).toBe(false);
+    expect(names.has("fn_chat_conversation_search")).toBe(false);
+  });
+
+  it("keeps room and mentioned-responder caller shapes free of conversation tools", async () => {
+    for (const callerOptions of [
+      { taskStore: baseTaskStore(), agentStore: baseAgentStore, agentId: "room-responder" },
+      { taskStore: baseTaskStore(), agentStore: baseAgentStore, agentId: "mentioned-responder" },
+    ]) {
+      const tools = await createChatFusionToolset({ rootDir: "/project", ...callerOptions });
+      const names = new Set(tools.map((tool) => tool.name));
+      expect(names.has("fn_chat_conversation_read")).toBe(false);
+      expect(names.has("fn_chat_conversation_search")).toBe(false);
+    }
   });
 
   it("does not regress existing read-only tools", async () => {
