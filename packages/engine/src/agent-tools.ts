@@ -135,7 +135,7 @@ export const taskSearchParams = Type.Object({
   limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, description: "Max results (default 20, max 50)" })),
 });
 
-export const patchnodeReadParams = Type.Object({
+export const historyReadParams = Type.Object({
   query: Type.Optional(Type.String({ description: "Search task IDs, titles, and completion summaries" })),
   from: Type.Optional(Type.String({ description: "First UTC day, YYYY-MM-DD (inclusive)" })),
   to: Type.Optional(Type.String({ description: "Last UTC day, YYYY-MM-DD (inclusive)" })),
@@ -1861,17 +1861,17 @@ export function createTaskSearchTool(store: TaskStore): ToolDefinition {
 FNXC:PatchnodeChat 2026-08-28-12:16:
 Chat reads the same permanent, per-delivery ledger as the dashboard and never looks task rows up, so archived and deleted deliveries remain answerable.
 
-FNXC:PatchnoteChat 2026-08-30-06:36:
-The former Patchnote display strings now call this delivery ledger History.
-The stable `fn_patchnode_read` tool name remains unchanged for existing agent prompts.
+FNXC:HistoryChat 2026-09-04-09:35:
+FN-293 completes the agent-facing rename by exposing only `fn_history_read`, without a compatibility alias.
+The HTTP route, PostgreSQL table, view id, i18n keys, and `@fusion/core` types and methods intentionally retain their stable `patchnode` identifiers.
 */
-export function createPatchnodeReadTool(store: TaskStore): ToolDefinition {
+export function createHistoryReadTool(store: TaskStore): ToolDefinition {
   return {
-    name: "fn_patchnode_read",
+    name: "fn_history_read",
     label: "Read History",
     description: "Read the permanent daily history of completed and reverted task deliveries.",
-    parameters: patchnodeReadParams,
-    execute: async (_id: string, params: Static<typeof patchnodeReadParams>) => {
+    parameters: historyReadParams,
+    execute: async (_id: string, params: Static<typeof historyReadParams>) => {
       const limit = Math.min(50, Math.max(1, Math.floor(params.limit ?? 20)));
       const result = await store.listPatchnodeEntries({
         ...(params.query?.trim() ? { query: params.query.trim() } : {}),

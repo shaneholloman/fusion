@@ -23,7 +23,7 @@ History is the permanent daily delivery history available from the main navigati
 
 Fusion writes a completion entry in the same database transaction that moves the task into its completion lane. The recorded title and summary are point-in-time snapshots that remain unchanged through later moves, re-summarisation, archive, or task deletion. A revert adds a distinct **Cancelled** entry paired to the specific delivery it cancels and marks that completion as **Reverted** without changing other deliveries of the same task.
 
-Chat reads this same history through the read-only `fn_patchnode_read` tool. Ask for a date range or search phrase to review shipped and cancelled work without opening the History view.
+Chat reads this same history through the read-only `fn_history_read` tool. Ask for a date range or search phrase to review shipped and cancelled work without opening the History view.
 
 ## Dashboard Updates
 

@@ -46,9 +46,9 @@ See the [2026-07-14 PostgreSQL runtime cutover review](./postgres-migration-revi
 
 ## Soft-deleted tasks (FN-5105)
 
-### Patchnode ledger (FN-227)
+### History ledger (FN-227)
 
-`project.patchnode_entries` is a permanent, project-scoped, append-only delivery ledger. It deliberately has no foreign key to `project.tasks`, no row-expiry job or size cap, and its feed query never joins or filters through task rows. Those deviations let captured titles and completion summaries remain readable after a task is soft-deleted, archived, and finally hard-deleted by archive cleanup.
+`project.patchnode_entries` is a permanent, project-scoped, append-only delivery ledger. This storage identifier and `reconcilePatchnodeLedger` intentionally retain their stable names. It deliberately has no foreign key to `project.tasks`, no row-expiry job or size cap, and its feed query never joins or filters through task rows. Those deviations let captured titles and completion summaries remain readable after a task is soft-deleted, archived, and finally hard-deleted by archive cleanup.
 
 Both completion writers insert the entry inside the same transaction that persists the completion-lane move. The occurrence key is that delivery's `columnMovedAt`: the next move overwrites this scalar, changes the lane, and permits later summary edits, so a post-commit or best-effort capture could become unrecoverable immediately. The transactional insert therefore fails the move when it cannot commit; retrying an uncommitted move is safer than silently losing shipped history.
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PatchnodeEntry, TaskStore } from "@fusion/core";
-import { createPatchnodeReadTool } from "../agent-tools.js";
+import { createHistoryReadTool } from "../agent-tools.js";
 
 const entries: PatchnodeEntry[] = [
   {
@@ -33,10 +33,14 @@ function storeWith(result = entries) {
 }
 
 async function execute(store: TaskStore, params: Record<string, unknown> = {}) {
-  return createPatchnodeReadTool(store).execute("call", params as never, undefined as never);
+  return createHistoryReadTool(store).execute("call", params as never, undefined as never);
 }
 
-describe("fn_patchnode_read", () => {
+describe("fn_history_read", () => {
+  it("exposes the renamed tool contract", () => {
+    expect(createHistoryReadTool(storeWith()).name).toBe("fn_history_read");
+  });
+
   it("renders a two-day feed with headers and delivery lines", async () => {
     const result = await execute(storeWith());
     expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("## 2026-08-28") });

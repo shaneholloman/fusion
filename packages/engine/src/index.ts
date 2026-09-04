@@ -66,7 +66,7 @@ export {
   createTaskListTool,
   createTaskShowTool,
   createTaskSearchTool,
-  createPatchnodeReadTool,
+  createHistoryReadTool,
   createTaskReadTools,
   createListAgentsTool,
   createDelegateTaskTool,
