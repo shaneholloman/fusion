@@ -198,6 +198,11 @@ export {
 } from "./project/postgres-migration-notice.js";
 export { AgentSemaphore, PRIORITY_MERGE, PRIORITY_EXECUTE, PRIORITY_SPECIFY } from "./concurrency/concurrency.js";
 export { TriageProcessor, type TriageProcessorOptions } from "./triage.js";
+/* FNXC:WorkflowRevisionBudget 2026-09-05-23:30: the dashboard retry route stamps the ledger reset, so the marker helper is part of the engine's public surface. */
+export {
+  optionalStepRevisionResetOutcome,
+  OPTIONAL_STEP_REVISION_RESET_MARKER,
+} from "./executor/optional-step-revision.js";
 export { TaskExecutor, type TaskExecutorOptions } from "./executor.js";
 export {
   WorkflowGraphExecutor,

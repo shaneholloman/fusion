@@ -19,10 +19,38 @@ export function optionalStepRevisionKey(nodeId: string | undefined, stepName: st
   return normalizeOptionalStepRevisionKey(nodeId) || normalizeOptionalStepRevisionKey(stepName) || "pre-merge-optional-step";
 }
 
+/*
+FNXC:WorkflowRevisionBudget 2026-09-05-23:30:
+FN-1711: the revision budget is derived from the task log, so a dashboard review restart — which
+discards the step result and re-runs the gate — left the counter untouched and the fresh review was
+refused for a budget the PREVIOUS episode had spent. Measured: a card whose Code Review was restarted
+twice still reported `Attempts: 6 / Maximum revisions: 3` and never merged. The log is append-only, so
+the restart appends this marker instead of rewriting history, and attempts recorded before the newest
+marker for the same revision key belong to the closed episode.
+*/
+export const OPTIONAL_STEP_REVISION_RESET_MARKER = "Workflow revision ledger reset:";
+
+export function optionalStepRevisionResetOutcome(key: string): string {
+  return `${OPTIONAL_STEP_REVISION_RESET_MARKER} ${key}`;
+}
+
+function resetIndexFor(log: NonNullable<Task["log"]>, normalizedKey: string): number {
+  for (let index = log.length - 1; index >= 0; index -= 1) {
+    const outcome = log[index]?.outcome ?? "";
+    const markerIndex = outcome.indexOf(OPTIONAL_STEP_REVISION_RESET_MARKER);
+    if (markerIndex < 0) continue;
+    const markerValue = outcome.slice(markerIndex + OPTIONAL_STEP_REVISION_RESET_MARKER.length).split(/\r?\n/, 1)[0]?.trim();
+    if (normalizeOptionalStepRevisionKey(markerValue) === normalizedKey) return index;
+  }
+  return -1;
+}
+
 export function countOptionalStepRevisionAttempts(task: Pick<Task, "log">, key: string, stepName: string | undefined): number {
   const normalizedKey = normalizeOptionalStepRevisionKey(key);
   const normalizedStepName = normalizeOptionalStepRevisionKey(stepName);
-  return (task.log ?? []).filter((entry) => {
+  const log = task.log ?? [];
+  const since = resetIndexFor(log, normalizedKey);
+  return (since >= 0 ? log.slice(since + 1) : log).filter((entry) => {
     const action = entry.action ?? "";
     const outcome = entry.outcome ?? "";
     if (!/attempt \d+\//.test(action)) return false;
