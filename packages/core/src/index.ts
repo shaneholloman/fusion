@@ -1427,7 +1427,9 @@ export {
   isAuditedOperatorBypass,
   requiresAuthoredReviewVerdict,
   requiresContentReviewProof,
+  resolveCollateralArchivedReviewGate,
   resolveUnprovenReviewApproval,
+  COLLATERAL_ARCHIVED_REVIEW_GATE_DIAGNOSTIC,
 } from "./merge/pre-merge-approval.js";
 export { getPostMergeFinalizeBlocker, planConfirmedMergeChecklistReconciliation } from "./merge/confirmed-merge-reconciliation.js";
 export type { ConfirmedMergeChecklistReconciliation } from "./merge/confirmed-merge-reconciliation.js";

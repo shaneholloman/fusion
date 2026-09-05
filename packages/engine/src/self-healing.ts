@@ -28,7 +28,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSy
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { loadWorkspaceConfig, type TaskMoveLanes, resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, hasSharedBranchMemberAutoMergeHold, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getPostMergeFinalizeBlocker, planConfirmedMergeChecklistReconciliation, getTaskMergeBlocker, resolvePreMergeGateForTask, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isLiveSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, resolveExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, getBuiltinWorkflow, isBuiltinWorkflowId, resolveWorkflowIrForTask, resolveWorkflowIrForTaskWithProvenance, resolveRequiredPreMergeStepIds, resolveReboundTarget, columnsWithFlag, resolveLifecycleColumns, resolveTaskLifecycleColumns, isWipColumnRole, isReviewColumnRole, isTerminalColumnRole, workflowHasColumn, planLegacyAdoption, resolveOrphanedPendingStepResults, resolveUnprovenReviewApproval, classifyReviewLease, PLAN_REVIEW_LEASE_STALENESS_MS, DEFAULT_MAX_POST_REVIEW_FIXES, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type MoveTaskOptions, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult, type WorkflowIr, type WorkflowIrV2,
+import { loadWorkspaceConfig, type TaskMoveLanes, resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, hasSharedBranchMemberAutoMergeHold, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getPostMergeFinalizeBlocker, planConfirmedMergeChecklistReconciliation, getTaskMergeBlocker, resolvePreMergeGateForTask, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isLiveSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, resolveExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, getBuiltinWorkflow, isBuiltinWorkflowId, resolveWorkflowIrForTask, resolveWorkflowIrForTaskWithProvenance, resolveRequiredPreMergeStepIds, resolveReboundTarget, columnsWithFlag, resolveLifecycleColumns, resolveTaskLifecycleColumns, isWipColumnRole, isReviewColumnRole, isTerminalColumnRole, workflowHasColumn, planLegacyAdoption, resolveOrphanedPendingStepResults, resolveUnprovenReviewApproval, resolveCollateralArchivedReviewGate, COLLATERAL_ARCHIVED_REVIEW_GATE_DIAGNOSTIC, classifyReviewLease, PLAN_REVIEW_LEASE_STALENESS_MS, DEFAULT_MAX_POST_REVIEW_FIXES, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type MoveTaskOptions, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult, type WorkflowIr, type WorkflowIrV2,
 
   resolveNearDuplicateCanonicalFlags,
   LEGACY_COLUMN_IDS_BY_ROLE,
@@ -1907,6 +1907,13 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       { name: "reconcile-orphaned-pending-step-results", fn: () => this.reconcileOrphanedPendingStepResults().then(() => undefined) },
       { name: "reconcile-unproven-review-approvals", fn: () => this.reconcileUnprovenReviewApprovals().then(() => undefined) },
       /*
+      FNXC:PreMergeApproval 2026-09-05-22:11:
+      Runs AFTER the orphaned-step sweep, because that sweep is what produces the `failed` row this
+      defect archives, and BEFORE failed-step recovery, so the restored gate is visible to it in the
+      same startup pass instead of one cycle later.
+      */
+      { name: "reconcile-collateral-archived-review-gates", fn: () => this.reconcileCollateralArchivedReviewGates().then(() => undefined) },
+      /*
       FNXC:WorkspaceContention 2026-08-23-08:00:
       `contention-hold` is owned by an in-memory retry timer. After a process restart that
       timer is gone, so clear only an unowned wait before ordinary dispatch classification;
@@ -2967,6 +2974,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           */
           { name: "reconcile-orphaned-pending-step-results", fn: () => this.reconcileOrphanedPendingStepResults() },
           { name: "reconcile-unproven-review-approvals", fn: () => this.reconcileUnprovenReviewApprovals() },
+          { name: "reconcile-collateral-archived-review-gates", fn: () => this.reconcileCollateralArchivedReviewGates() },
           { name: "recover-failed-pre-merge-steps", fn: () => this.recoverReviewTasksWithFailedPreMergeSteps() },
           { name: "recover-missing-worktree-review-failures", fn: () => this.recoverMissingWorktreeReviewFailures() },
           { name: "recover-interrupted-merging", fn: () => this.recoverInterruptedMergingTasks() },
@@ -8924,6 +8932,132 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       return repairedTasks;
     } catch (error) {
       log.error(`reconcileUnprovenReviewApprovals failed: ${error instanceof Error ? error.message : String(error)}`);
+      return 0;
+    }
+  }
+
+  /**
+   * FNXC:PreMergeApproval 2026-09-05-22:11:
+   * FN-295: restore a required pre-merge gate that was archived as COLLATERAL of another gate's
+   * remediation, so the card stops being permanently unmergeable with no owner.
+   *
+   * The wedge needs four ingredients, none of which is individually wrong: a review row left
+   * `pending` by a dead session, the orphaned-step sweep rewriting it to `failed`, the remediation
+   * archiver stamping EVERY terminal failure (not just its own gate), and the merge door treating
+   * `remediationArchivedAt` as an unconditional veto. The result is a row the reseed cannot re-run
+   * (it handles `missing`), the stale-content reroute cannot re-run (it handles `stale-content`),
+   * and the operator bypass cannot select (it selects `status:"failed"`). Measured on FN-295: three
+   * review restarts re-ran Code Review and Documentation to APPROVE and merged nothing.
+   *
+   * This sweep does NOT approve or merge anything: it undoes the collateral archive so the gate is
+   * once again a visible failed step that the ordinary FN-7720 audited bypass — or a genuine re-run
+   * — can clear. It never touches an operator waiver, the gate that owns the remediation wave, a
+   * workspace card, a user-paused card, or a card with a live session, and it re-validates every
+   * condition inside the atomic mutation.
+   */
+  async reconcileCollateralArchivedReviewGates(): Promise<number> {
+    try {
+      const reviewColumns = await resolveProjectColumnsForRoles(this.store, REVIEW_ROLES);
+      const candidates = new Map<string, Task>();
+      for (const column of reviewColumns) {
+        for (const task of await this.store.listTasks({ column, slim: true })) candidates.set(task.id, task);
+      }
+      let repairedTasks = 0;
+      const isSessionLive = (taskId: string): boolean => {
+        const livePaths = activeSessionRegistry.pathsForTask(taskId);
+        return livePaths.some((path) => activeSessionRegistry.isPathActive(path))
+          || executingTaskLock.has(taskId)
+          || this.options.isTaskActive?.(taskId) === true;
+      };
+      /* The gate that requested the open remediation keeps its archive: that archive is its own ledger. */
+      const remediationGateIdsFor = (task: Task): ReadonlySet<string> => new Set(
+        (task.steps ?? [])
+          .map((step) => step.remediation?.gateStepId)
+          .filter((gateStepId): gateStepId is string => typeof gateStepId === "string" && gateStepId.length > 0),
+      );
+
+      for (const candidate of candidates.values()) {
+        if (candidate.userPaused === true || candidate.workspaceWorktrees !== undefined || isSessionLive(candidate.id)) continue;
+
+        const fresh = await this.store.getTask(candidate.id);
+        if (!fresh
+          || !reviewColumns.has(fresh.column)
+          || fresh.userPaused === true
+          || fresh.workspaceWorktrees !== undefined
+          || isSessionLive(fresh.id)) continue;
+        if (!(fresh.workflowStepResults ?? []).some((result) =>
+          resolveCollateralArchivedReviewGate(result, { remediationGateIds: remediationGateIdsFor(fresh) }))) continue;
+
+        /* Only a gate the merge door actually requires can hold the card; anything else is not this defect. */
+        let requiredPreMergeStepIds: ReadonlySet<string>;
+        try {
+          requiredPreMergeStepIds = (await resolvePreMergeGateForTask(
+            this.store,
+            fresh.id,
+            fresh.enabledWorkflowSteps,
+            fresh,
+          )).requiredPreMergeStepIds;
+        } catch {
+          continue;
+        }
+        if (requiredPreMergeStepIds.size === 0) continue;
+
+        let repair: { stepIds: string[]; column: string; resultCount: number } | undefined;
+        try {
+          await this.store.updateTaskAtomic(fresh.id, (live) => {
+            repair = undefined;
+            if (!reviewColumns.has(live.column)
+              || live.userPaused === true
+              || live.workspaceWorktrees !== undefined
+              || isSessionLive(live.id)) return null;
+
+            const remediationGateIds = remediationGateIdsFor(live);
+            const restoredStepIds: string[] = [];
+            const results = (live.workflowStepResults ?? []).map((result) => {
+              if (!requiredPreMergeStepIds.has(result.workflowStepId)) return result;
+              const resolution = resolveCollateralArchivedReviewGate(result, { remediationGateIds });
+              if (!resolution) return result;
+              restoredStepIds.push(result.workflowStepId);
+              return resolution.restored;
+            });
+            if (restoredStepIds.length === 0) return null;
+
+            repair = { stepIds: restoredStepIds, column: live.column, resultCount: results.length };
+            return { workflowStepResults: results };
+          });
+          if (!repair) continue;
+          repairedTasks += 1;
+        } catch (error) {
+          log.warn(`reconcileCollateralArchivedReviewGates: failed for ${fresh.id}: ${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
+
+        await this.store.logEntry(
+          fresh.id,
+          `[pre-merge] Restored collaterally archived review gate(s): ${repair.stepIds.join(", ")}`,
+          COLLATERAL_ARCHIVED_REVIEW_GATE_DIAGNOSTIC,
+        ).catch(() => undefined);
+        await emitBoundedRunAudit(this.store, {
+          taskId: fresh.id,
+          agentId: "self-healing",
+          runId: generateSyntheticRunId("reconcile-collateral-archived-review-gate", fresh.id),
+          domain: "database",
+          mutationType: "task:reconcile-collateral-archived-review-gate",
+          target: fresh.id,
+          metadata: {
+            taskId: fresh.id,
+            column: repair.column,
+            workflowStepId: repair.stepIds[0],
+            restoredCount: repair.stepIds.length,
+            resultCount: repair.resultCount,
+          },
+        }, { log });
+      }
+
+      if (repairedTasks > 0) log.log(`Restored collaterally archived review gates on ${repairedTasks} task(s)`);
+      return repairedTasks;
+    } catch (error) {
+      log.error(`reconcileCollateralArchivedReviewGates failed: ${error instanceof Error ? error.message : String(error)}`);
       return 0;
     }
   }
