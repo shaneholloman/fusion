@@ -16,6 +16,7 @@ vi.mock("../util/run-audit.js", async (importOriginal) => ({
 
 import { SelfHealingManager } from "../self-healing.js";
 import { evaluateStrandedContinuationReclaim } from "../workflows/stranded-continuation-reclaim.js";
+import { registerPlanningLivenessProbe } from "../agents/planning-liveness.js";
 
 /*
 FNXC:StrandedContinuationReclaim 2026-08-11-09:12:
@@ -198,5 +199,36 @@ describe("evaluateStrandedContinuationReclaim", () => {
       item: { ...base.item, leaseExpiresAt: new Date(base.now + 60_000).toISOString() },
       stalenessMs: 24 * 3_600_000,
     })).toEqual({ action: "none", reason: "lease-active" });
+  });
+});
+
+/*
+FNXC:StrandedContinuationReclaim 2026-09-05-23:52:
+FN-282 regression (FN-299): once planning stopped acquiring the task worktree it registered no session
+path, so a planner still writing PROMPT.md read as a dead lease and its `plan` continuation was
+re-queued underneath it — which re-dispatched the plan node and fired Plan Review against a spec that
+did not exist yet.
+*/
+describe("planning liveness protects a live plan continuation", () => {
+  it("leaves a running plan continuation alone while its planner is live", async () => {
+    const { manager, transitions } = harness([item({ nodeId: "plan", leaseOwner: "triage:FN-8932" })]);
+    const unregister = registerPlanningLivenessProbe((taskId) => taskId === "FN-8932");
+    try {
+      await expect(manager.reconcileStrandedWorkflowContinuations()).resolves.toBe(0);
+      expect(transitions).toEqual([]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("still re-queues it once the planner is gone", async () => {
+    const { manager, transitions } = harness([item({ nodeId: "plan", leaseOwner: "triage:FN-8932" })]);
+    const unregister = registerPlanningLivenessProbe((taskId) => taskId === "FN-OTHER");
+    try {
+      await expect(manager.reconcileStrandedWorkflowContinuations()).resolves.toBe(1);
+      expect(transitions).toEqual([expect.objectContaining({ state: "runnable" })]);
+    } finally {
+      unregister();
+    }
   });
 });

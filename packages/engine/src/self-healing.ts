@@ -92,6 +92,7 @@ import { rerouteUnrunPreMergeGateToReview } from "./merge/pre-merge-gate-reseed.
 import { cleanupLandedTaskWorktree, removeEmptyWorkspaceTaskDirectory } from "./merge/post-landing-worktree-cleanup.js";
 import { AutoRecoveryDispatcher } from "./healing/auto-recovery.js";
 import { activeSessionRegistry, executingTaskLock } from "./agents/active-session-registry.js";
+import { isPlanningLive } from "./agents/planning-liveness.js";
 import { isTaskStillInPlanningStage } from "./execution/replan-target.js";
 import {
   classifyPersistedPlanHandoff,
@@ -8449,8 +8450,21 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       const graceMs = 10 * 60_000;
       const now = Date.now();
       const nowIso = new Date(now).toISOString();
+      /*
+      FNXC:StrandedContinuationReclaim 2026-09-05-23:52:
+      FN-282 regression (FN-299): a PLANNING session is live work that this proof could not see. Planning
+      used to acquire the task worktree, so it appeared in `activeSessionRegistry` by path; once planning
+      moved to the main checkout it registers no path, holds no `executingTaskLock`, and is not an
+      executing task — so a planner still writing PROMPT.md read as a dead lease and its `plan`
+      continuation was re-queued underneath it. The re-queue re-dispatched the plan node and Plan Review
+      fired 1-2s later against a spec that did not exist yet, whose result row then stayed `pending`.
+      Measured: 10 `plan / running / dead-lease` reclaims across 8 cards in the two days after FN-282
+      landed, and zero in the three weeks before it. `isPlanningLive` is the registry triage already
+      publishes for exactly this question; consulting it costs nothing and closes the race.
+      */
       const live = (taskId: string) => activeSessionRegistry.pathsForTask(taskId).some((path) => activeSessionRegistry.isPathActive(path))
         || executingTaskLock.has(taskId)
+        || isPlanningLive(taskId)
         || this.options.isTaskActive?.(taskId) === true;
       const due = await this.store.listDueWorkflowWorkItems({
         now: nowIso,
