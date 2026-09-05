@@ -149,7 +149,6 @@ describe("buildBoardWorkflowsPayload built-in column labels", () => {
       "in-progress": "In Progress",
       "in-review": "In Review",
       done: "Done",
-      archived: "Archived",
     });
     // And the merged column is gone, so nothing should be canonicalising a `triage` label any more.
     expect(named).not.toHaveProperty("triage");

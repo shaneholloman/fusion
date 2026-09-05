@@ -40,7 +40,7 @@ describe("triage-preflight", () => {
       "`foo_bar`",
       { cwd: process.cwd(), exec },
     );
-    expect(decision.decision).toBe("archive");
+    expect(decision.decision).toBe("delete");
   });
 
   it("passes when at least one construct matches", async () => {

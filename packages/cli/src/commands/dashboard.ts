@@ -1195,8 +1195,8 @@ export async function runDashboard(port: number, opts: { paused?: boolean; dev?:
         `BUILTIN_CODING_WORKFLOW_IR` is the legacy monolithic IR (`builtin:legacy-coding`);
         `resolveDefaultWorkflowIr()` is the catalog's actual default. Post-U11 they DIFFER:
 
-            default  todo, in-progress, in-review, done, archived        (planning merged into todo)
-            legacy   triage, todo, in-progress, in-review, done, archived
+            default  todo, in-progress, in-review, done        (planning merged into todo)
+            legacy   triage, todo, in-progress, in-review, done
 
         So a task with no selection row rendered a `triage` column the real default no longer
         declares — the TUI board showed a lane the board does not have.
@@ -2364,8 +2364,8 @@ export async function runDashboard(port: number, opts: { paused?: boolean; dev?:
 
     // FNXC:ExtensionHostStoreWarmup 2026-07-18-19:20:
     // Pre-populate setHostTaskStore for all registered projects from already-
-    // running ProjectEngine TaskStores, so extension API tools (fn_task_archive,
-    // fn_task_update, etc.) find a cached store and never fall through to
+    // running ProjectEngine TaskStores, so extension API tools (fn_task_update,
+    // fn_task_delete, etc.) find a cached store and never fall through to
     // createTaskStoreForBackend (which times out creating a second pool).
     // Reuses each engine's existing TaskStore directly — no new PG boot needed.
     void (async () => {

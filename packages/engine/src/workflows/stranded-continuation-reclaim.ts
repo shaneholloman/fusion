@@ -59,7 +59,7 @@ export interface StrandedContinuationVerdict {
  *
  * - `enginePaused` wins over everything. A paused engine must not silently re-queue work an operator
  *   stopped; the row is still stranded when the engine resumes and the next sweep sees it.
- * - Retirement is tested BEFORE the pause and liveness gates. A soft-deleted or archived task has no
+ * - Retirement is tested BEFORE the pause and liveness gates. A soft-deleted or historical task has no
  *   operator decision left to respect and no session that could be live, and its row is exactly the
  *   residue that accumulates for a month when this check sits behind those guards.
  * - `manual-hold` is an operator-owned kind (`WORKFLOW_WORK_ITEM_KINDS`), not an accident. Its whole

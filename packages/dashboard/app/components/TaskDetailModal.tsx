@@ -32,7 +32,6 @@ import { isNearDuplicateCanonicalInactive } from "../../../core/src/duplicates/n
 import { getRevertOfId, findOpenUndoTaskForSource, isTaskReverted } from "../utils/taskRevert";
 import { isForeignTaskEvent, readTaskEventProjectId } from "../utils/taskEventProjectScope";
 import {
-  isArchivedColumnRole,
   isCompleteColumnRole,
   isHoldColumnRole,
   isFieldEditableColumnRole,
@@ -444,8 +443,6 @@ export interface TaskDetailModalProps {
     githubIssueAction?: GithubIssueAction;
     allowResurrection?: boolean;
   }) => Promise<Task>;
-  onArchiveTask?: (id: string, options?: { removeLineageReferences?: boolean }) => Promise<Task>;
-  /* FNXC:TaskRevert 2026-07-05-00:00 (FN-7525): threaded alongside onArchiveTask; never mutates the source task's column. */
   onRevertTask?: (id: string, body?: RevertTaskOptions) => Promise<RevertTaskResult>;
   onMergeTask: (id: string) => Promise<MergeResult>;
   onRetryTask?: (id: string) => Promise<Task>;
@@ -812,7 +809,7 @@ DEFINITION — consulted via `.has()`, so nothing in the backlog ever pointed he
 hid `TIME_INDICATOR_COLUMNS` and `BLOCKER_ESCALATION_COLUMNS`, both of which were also found by hand
 rather than by any gate.
 
-The set's meaning is "not finished": every lane except complete and archived. That is what the roles
+The set's meaning is "not finished": every lane except the workflow's Complete column. That is what the roles
 now express. Flags are OPTIONAL and the legacy set remains the fallback, so a render before the
 workflow metadata lands behaves exactly as it does today.
 
@@ -829,7 +826,7 @@ function canTaskEditGithubTracking(
 ): boolean {
   if (workflowId === CODING_IDEAS_WORKFLOW_ID) return true;
   if (!columnFlags) return GITHUB_TRACKING_EDITABLE_COLUMNS.has(column);
-  return !isCompleteColumnRole(columnFlags, column) && !isArchivedColumnRole(columnFlags, column);
+  return !isCompleteColumnRole(columnFlags, column);
 }
 
 export function TaskDetailContent({
@@ -840,7 +837,6 @@ export function TaskDetailContent({
   onOpenDetail,
   onDeleteTask,
   onReviseTask,
-  onArchiveTask,
   onRevertTask,
   onMergeTask,
   onRetryTask,
@@ -1147,23 +1143,21 @@ export function TaskDetailContent({
   /**
    * FNXC:NearDuplicateDetection 2026-06-14-12:00:
    * The duplicate banner is actionable only while the referenced canonical exists and is active.
-   * Suppress the whole affordance for missing, archived, done, or soft-deleted canonicals so no empty banner shell or stale user-decision buttons remain.
+   * Suppress the whole affordance for missing, completed, or soft-deleted canonicals so no empty banner shell or stale user-decision buttons remain.
    */
-  // FNXC:DuplicateIntake 2026-07-16-13:00: Issue #2225 reuses this linked banner for triage-marker Keep/Delete decisions.
-  const isTriageMarkerDuplicate = workingTask.sourceMetadata?.duplicateSource === "triage-marker";
   /*
   FNXC:DuplicateIntake 2026-07-30-05:00 DELIBERATE-LITERAL: terminal check on THIS modal's own task,
   and the flags for it are not resolved at this point in the render. `workflowMoveMetadata` (which
   carries `currentColumnFlags`) is fetched asynchronously and is null on first paint, so reading it
   here would suppress the near-duplicate warning for one frame on every open — a flicker on a
-  correctness banner. The terminal ids are stable for every board that has not renamed done/archived,
+  correctness banner. The completion id is stable for every board that has not renamed done,
   and the cost of the legacy answer is bounded: a renamed terminal column shows the banner one state
   too long, versus hiding it wrongly on every open.
 
   FNXC:WorkflowResolvedColumns 2026-07-30-20:10 (PR #2772 review — I TRIED THIS AND WAS WRONG):
   The sizing above stands, and I am recording the failed attempt so it is not retried a third time.
 
-  I converted these two to `isArchivedColumnRole`/`isCompleteColumnRole`, reasoning that the helpers'
+  I converted the check to `isCompleteColumnRole`, reasoning that the helper's
   id-fallback makes a first-paint read byte-identical to the literal, so no parent change is needed.
   tsc refused it: `detailColumnFlags` is declared ~60 lines BELOW this point (it derives from
   `workflowMoveMetadata`, a useState at ~959), so the value simply does not exist here. "The flags are
@@ -1203,12 +1197,11 @@ export function TaskDetailContent({
   /*
   FNXC:NearDuplicateDetection 2026-08-23-04:10:
   FN-173 makes the duplicate flag acknowledgeable rather than an opaque decision. The actions row only
-  exists for Delete or Archive so ordinary cards without archive access do not leave an empty shell.
+  exists for Delete or Keep so ordinary cards do not leave an empty shell.
   */
   // FNXC:WorkflowLifecycle 2026-08-31-07:33: DELIBERATE-LITERAL — absent canonical workflow flags require legacy terminal-column fallback semantics.
   const showNearDuplicateWarning = Boolean(nearDuplicateOf)
     && workingTask.sourceMetadata?.nearDuplicateDismissed !== true
-    && task.column !== "archived"
     && task.column !== "done"
     && !isNearDuplicateCanonicalInactive(
       nearDuplicateCanonical,
@@ -1233,7 +1226,7 @@ export function TaskDetailContent({
    * FNXC:TaskRevert 2026-07-04-00:00:
    * Reverse direction (FN-7555): scan the loaded `tasks` list for the most recent OPEN undo
    * task pointing back at this task via `revertOf`. Mirrors `TaskStore.findOpenRevertTaskForSource`
-   * (open board columns only) so a done/archived/soft-deleted prior undo attempt never renders as
+   * (open board columns only) so a completed or soft-deleted prior undo attempt never renders as
    * an active "Undo task" link — that would be a stale/leftover affordance.
    */
   /* FNXC:WorkflowResolvedColumns 2026-07-31-23:20: the CANDIDATES' own flags, keyed by id — the same
@@ -1308,13 +1301,12 @@ export function TaskDetailContent({
   */
   const detailColumnFlags = detailFlagsAreForThisTask ? workflowMoveMetadata?.currentColumnFlags : undefined;
   const isDoneColumn = isCompleteColumnRole(detailColumnFlags, task.column);
-  const isArchivedColumn = isArchivedColumnRole(detailColumnFlags, task.column);
   const isWipColumn = isWipColumnRole(detailColumnFlags, task.column);
   const isReviewColumn = isReviewColumnRole(detailColumnFlags, task.column);
   // FNXC:WorkflowLifecycle 2026-08-31-07:33: DELIBERATE-LITERAL — absent detail workflow flags require the legacy mutable-column fallback.
   const isMutableLiveColumn = detailColumnFlags
-    ? detailColumnFlags.complete !== true && detailColumnFlags.archived !== true
-    : task.column !== "done" && task.column !== "archived";
+    ? detailColumnFlags.complete !== true
+    : task.column !== "done";
 
   useEffect(() => {
     /*
@@ -1776,7 +1768,7 @@ export function TaskDetailContent({
   const [showOversightMenu, setShowOversightMenu] = useState(false);
   const oversightMenuRef = useRef<HTMLDivElement>(null);
   const oversightMenuButtonRef = useRef<HTMLButtonElement>(null);
-  const { confirm, confirmWithChoice, confirmWithCheckbox, confirmWithSelect } = useConfirm();
+  const { confirm, confirmWithCheckbox, confirmWithSelect } = useConfirm();
   const requestClose = useCallback(() => {
     onRequestClose?.();
   }, [onRequestClose]);
@@ -3210,65 +3202,18 @@ export function TaskDetailContent({
       return true;
     };
 
-    if (!isArchivedColumn && onArchiveTask) {
-      const deleteChoice = await confirmWithChoice({
-        title: t("taskDetail.delete.title", "Delete Task"),
-        message: t("taskDetail.delete.message", "Delete {{id}}?", { id: task.id }),
-        confirmLabel: t("taskDetail.delete.confirm", "Delete"),
-        cancelLabel: t("common.cancel", "Cancel"),
-        tertiaryLabel: t("taskDetail.delete.archiveInstead", "Archive Instead"),
-        danger: true,
-      });
-      if (deleteChoice === "tertiary") {
-        try {
-          await onArchiveTask(task.id);
-          addToast(t("taskDetail.nearDuplicate.archived", "Archived {{id}}", { id: task.id }), "success");
-          requestClose();
-        } catch (err) {
-          const lineageConflict = extractLineageDeleteConflict(err);
-          if (!lineageConflict || lineageConflict.lineageChildIds.length === 0) {
-            addToast(getErrorMessage(err), "error");
-            return;
-          }
-
-          const confirmedArchive = await confirm({
-            title: t("taskDetail.delete.forceDeleteTitle", "Force Delete Task"),
-            message:
-              `${task.id} has lineage children (${lineageConflict.lineageChildIds.join(", ")}) that reference it as a source parent.\n\n` +
-              t("taskDetail.delete.archiveUnlinkPrompt", "Archive anyway by unlinking these references first?"),
-            danger: true,
-          });
-          if (!confirmedArchive) {
-            return;
-          }
-
-          try {
-            await onArchiveTask(task.id, { removeLineageReferences: true });
-            addToast(t("taskDetail.delete.archivedAfterUnlink", "Archived {{id}} after unlinking lineage references", { id: task.id }), "success");
-            requestClose();
-          } catch (retryErr) {
-            addToast(getErrorMessage(retryErr), "error");
-          }
-        }
-        return;
-      }
-      if (deleteChoice !== "primary") {
-        return;
-      }
-    } else {
-      const { choice, checkboxValue } = await confirmWithCheckbox({
-        title: t("taskDetail.delete.title", "Delete Task"),
-        message: t("taskDetail.delete.message", "Delete {{id}}?", { id: task.id }),
-        danger: true,
-        checkbox: {
-          label: t("taskDetail.delete.allowRecreation", "Allow re-creation later (operator unlock)"),
-          description: t("taskDetail.delete.allowRecreationDesc", "Lets agents recreate this task ID without --force-resurrect. Leave unchecked to keep this task tombstoned."),
-          defaultChecked: false,
-        },
-      });
-      if (choice !== "primary") return;
-      allowResurrection = checkboxValue === true;
-    }
+    const { choice, checkboxValue } = await confirmWithCheckbox({
+      title: t("taskDetail.delete.title", "Delete Task"),
+      message: t("taskDetail.delete.message", "Delete {{id}}?", { id: task.id }),
+      danger: true,
+      checkbox: {
+        label: t("taskDetail.delete.allowRecreation", "Allow re-creation later (operator unlock)"),
+        description: t("taskDetail.delete.allowRecreationDesc", "Lets agents recreate this task ID without --force-resurrect. Leave unchecked to keep this task tombstoned."),
+        defaultChecked: false,
+      },
+    });
+    if (choice !== "primary") return;
+    allowResurrection = checkboxValue === true;
 
     const trackedIssue = task.githubTracking?.enabled === true ? task.githubTracking.issue : undefined;
     let githubIssueAction: GithubIssueAction | undefined;
@@ -3396,7 +3341,7 @@ export function TaskDetailContent({
         addToast(getErrorMessage(retryErr), "error");
       }
     }
-  }, [task.column, task.githubTracking?.enabled, task.githubTracking?.issue, task.id, onDeleteTask, onArchiveTask, requestClose, addToast, confirm, confirmWithChoice, confirmWithCheckbox, isArchivedColumn]);
+  }, [task.githubTracking?.enabled, task.githubTracking?.issue, task.id, onDeleteTask, requestClose, addToast, confirm, confirmWithCheckbox]);
   handleDeleteRef.current = handleDelete;
 
   const handleMerge = useCallback(async () => {
@@ -3565,32 +3510,14 @@ export function TaskDetailContent({
     }
   }, [task.id, projectId, onTaskUpdated, addToast]);
 
-  const handleArchiveNearDuplicate = useCallback(async () => {
-    if (!onArchiveTask) return;
-    const confirmed = await confirm({
-      title: t("taskDetail.nearDuplicate.archiveTitle", "Archive near-duplicate task"),
-      message: t("taskDetail.nearDuplicate.archiveMessage", "Archive {{id}} as a duplicate of {{duplicateOf}}?", { id: task.id, duplicateOf: nearDuplicateOf }),
-      confirmLabel: t("taskDetail.nearDuplicate.archiveConfirm", "Archive"),
-      cancelLabel: t("common.cancel", "Cancel"),
-      danger: true,
-    });
-    if (!confirmed) return;
-    try {
-      await onArchiveTask(task.id);
-      addToast(t("taskDetail.nearDuplicate.archived", "Archived {{id}}", { id: task.id }), "success");
-      requestClose();
-    } catch (err) {
-      addToast(getErrorMessage(err), "error");
-    }
-  }, [onArchiveTask, confirm, task.id, nearDuplicateOf, addToast, requestClose]);
 
   /*
    * FNXC:DuplicateIntake 2026-07-16-14:00:
    * Issue #2225 requires triage-marker duplicates to offer a real clear-or-delete decision.
-   * Unlike the ordinary near-duplicate Archive action, Delete calls the existing soft-delete
+   * Every duplicate decision uses the existing soft-delete
    * API and clears incoming lineage references so the confirmed duplicate is actually removed.
    */
-  const handleDeleteTriageDuplicate = useCallback(async () => {
+  const handleDeleteNearDuplicate = useCallback(async () => {
     const confirmed = await confirm({
       title: t("taskDetail.nearDuplicate.deleteTitle", "Delete duplicate task"),
       message: t("taskDetail.nearDuplicate.deleteMessage", "Delete {{id}} as a duplicate of {{duplicateOf}}?", { id: task.id, duplicateOf: nearDuplicateOf }),
@@ -3617,8 +3544,7 @@ export function TaskDetailContent({
   AI-undo task on conflict/unsupported. The source task's column is never
   mutated as a side effect.
   */
-  const isRevertable = (isDoneColumn || isArchivedColumn)
-    && Boolean(task.mergeDetails?.commitSha);
+  const isRevertable = isDoneColumn && Boolean(task.mergeDetails?.commitSha);
 
   const handleRevertTask = useCallback(async () => {
     if (!onRevertTask) return;
@@ -4032,7 +3958,7 @@ export function TaskDetailContent({
   /*
   FNXC:SharedBranchPromotionAdvisories 2026-08-08-02:16:
   FN-8823 promotion advisories must open the landed member on Review, not its
-  done-task default tab; archived members require a fresh detail read.
+  completed-task default tab; every member is loaded through the authoritative detail route.
   */
   const handleOpenMemberReview = useCallback(async (memberTaskId: string) => {
     try {
@@ -4068,7 +3994,7 @@ export function TaskDetailContent({
       requestClose();
     } catch (err) {
       const msg = getErrorMessage(err);
-      if (msg.includes("done") || msg.includes("archived")) {
+      if (msg.includes("done") || msg.includes("complete")) {
         addToast(t("taskDetail.spec.revisionColumnError", "Cannot request revision: Task must be in 'triage', 'todo', 'in-progress', or 'in-review' column."), "error");
       } else {
         addToast(msg, "error");
@@ -4224,8 +4150,8 @@ export function TaskDetailContent({
   task) — approximated client-side via presence of `task.plannerOverseerState`
   (FN-7531; only ever populated while there is a live observation). Nudge
   additionally respects the human-control safeguards this task must NOT
-  re-implement (FN-7513/FN-7514): user-pause (`isTaskPaused`), done/archived
-  terminal columns, and the `autoMerge:false` in-review human-review terminal
+  re-implement (FN-7513/FN-7514): user-pause (`isTaskPaused`), workflow Complete
+  columns, and the `autoMerge:false` in-review human-review terminal
   (approximated here via `effectiveAutoMerge`, the same resolver the merge UI
   already uses — the server-side `evaluateOverseerHumanControl` guard is the
   real enforcement; this is a client-side disable heuristic only). Stop is
@@ -4241,7 +4167,7 @@ export function TaskDetailContent({
   reworded copy below differentiates two distinct disabled reasons instead of
   one alarming message: (1) no observation yet — reassuring, periodic-poll
   framing (`nudgeDisabledTitle`); (2) human-control suppressed — user-paused,
-  done/archived, or the `autoMerge:false` in-review human-review terminal —
+  workflow Complete, or the `autoMerge:false` in-review human-review terminal —
   which gets its own distinct copy (`nudgeSuppressedTitle`) naming manual
   control as the reason instead of implying the overseer is idle. Neither
   `canNudgeOverseer` nor any other enablement/gating boolean changed; this is
@@ -4262,9 +4188,8 @@ export function TaskDetailContent({
   */
   const overseerSnapshot = workingTask.plannerOverseerState ?? null;
   const overseerActive = Boolean(overseerSnapshot);
-  const isDoneOrArchivedColumn = isDoneColumn || isArchivedColumn;
   const isOverseerHumanReviewTerminal = isReviewColumn && !effectiveAutoMerge;
-  const overseerHumanControlSuppressed = Boolean(isTaskPaused) || isDoneOrArchivedColumn || isOverseerHumanReviewTerminal;
+  const overseerHumanControlSuppressed = Boolean(isTaskPaused) || isDoneColumn || isOverseerHumanReviewTerminal;
   const oversightIsOff = effectiveOversightLevel === "off";
   /*
   FNXC:PlannerOversight 2026-07-18-14:00:
@@ -5218,7 +5143,6 @@ export function TaskDetailContent({
                   customFields={customFieldValues}
                   onSave={handleSaveCustomFields}
                   error={customFieldError}
-                  readOnly={Boolean(isArchivedColumn)}
                 />
               ) : null}
               {showNearDuplicateWarning && (
@@ -5226,15 +5150,6 @@ export function TaskDetailContent({
                   <div className="detail-near-duplicate-banner__header">
                     <AlertTriangle aria-hidden="true" />
                     <span className="detail-near-duplicate-banner__headline">{t("taskDetail.nearDuplicate.headline", "Potential duplicate detected")}</span>
-                    <button
-                      type="button"
-                      className="detail-near-duplicate-banner__dismiss"
-                      onClick={() => void handleDismissNearDuplicate()}
-                      title={t("taskDetail.nearDuplicate.dismissBtn", "Mark the duplicate flag for {{id}} as read", { id: nearDuplicateOf })}
-                      aria-label={t("taskDetail.nearDuplicate.dismissBtn", "Mark the duplicate flag for {{id}} as read", { id: nearDuplicateOf })}
-                    >
-                      <X size={14} aria-hidden="true" />
-                    </button>
                   </div>
                   <p className="detail-near-duplicate-banner__copy">
                     {t("taskDetail.nearDuplicate.copy", "This task appears to be a near-duplicate of")}{" "}
@@ -5249,23 +5164,16 @@ export function TaskDetailContent({
                     >
                       {nearDuplicateOf}
                     </button>
-                    {". "}{isTriageMarkerDuplicate
-                      ? t("taskDetail.nearDuplicate.triageActions", "This task stays paused until you clear this flag or delete it. Delete it if the work is already covered.")
-                      : t("taskDetail.nearDuplicate.actions", "This task continues normally. Archive it if the work is already covered, or clear this flag once you have read it.")}
+                    {". "}{t("taskDetail.nearDuplicate.actions", "Keep it to clear this flag, or delete it if the work is already covered.")}
                   </p>
-                  {(isTriageMarkerDuplicate || onArchiveTask) && (
-                    <div className="detail-near-duplicate-banner__actions">
-                      {isTriageMarkerDuplicate ? (
-                        <button type="button" className="btn btn-danger btn-sm" onClick={() => void handleDeleteTriageDuplicate()}>
-                          {t("taskDetail.nearDuplicate.deleteBtn", "Delete")}
-                        </button>
-                      ) : onArchiveTask ? (
-                        <button type="button" className="btn btn-danger btn-sm" onClick={() => void handleArchiveNearDuplicate()}>
-                          {t("taskDetail.nearDuplicate.archiveBtn", "Archive")}
-                        </button>
-                      ) : null}
-                    </div>
-                  )}
+                  <div className="detail-near-duplicate-banner__actions">
+                    <button type="button" className="btn btn-danger btn-sm" onClick={() => void handleDeleteNearDuplicate()}>
+                      {t("taskDetail.nearDuplicate.deleteBtn", "Delete")}
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleDismissNearDuplicate()}>
+                      {t("taskDetail.nearDuplicate.keepBtn", "Keep")}
+                    </button>
+                  </div>
                 </div>
               )}
               {/*
@@ -7490,13 +7398,13 @@ export function TaskDetailContent({
 
               {/*
               FNXC:TaskRevert 2026-07-05-00:00 (FN-7525):
-              Detail-view Revert button for done/archived tasks, mirroring the
+              Detail-view Revert button for workflow Complete tasks, mirroring the
               standalone triage Delete button above. Rendered (not just menu-only)
               because the detail view is the primary surface for reviewing a
               completed task's outcome. Omitted — not disabled — when the task has
               no landed commit to revert, avoiding an empty button shell.
               */}
-              {(isDoneColumn || isArchivedColumn) && onRevertTask && isRevertable && (
+              {isDoneColumn && onRevertTask && isRevertable && (
                 <button
                   className="btn btn-sm"
                   onClick={() => void handleRevertTask()}

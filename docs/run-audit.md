@@ -49,7 +49,7 @@ Reconciliation-scoped auto-recover/reclaim events the self-healing sweep surface
 | --- | --- |
 | `task:auto-recover-paused-abort-park` | Self-healing clears a benign pause-abort operator park and requeues the task. |
 | `task:auto-rebound-paused-scope-decay` | Self-healing rebounds a task whose paused scope decayed past its floor, unblocking followers. |
-| `task:auto-archive-failure-budget-exhausted` | Self-healing abandons a repeatedly failing stale-task archive and surfaces it for operator action. |
+| `task:auto-archive-failure-budget-exhausted` | Historical event retained for reading pre-removal logs; current self-healing does not archive tasks. |
 | `task:reclaim-phantom-executor-binding` | Self-healing proves an in-memory executor-active binding is stale and requeues the task. |
 | `task:reconcile-orphaned-pending-step-results` | Self-healing rewrites orphaned `pending` workflow-step results (no live session) to `failed`. |
 | `task:reconcile-unproven-review-approval` | Self-healing rewrites singular content-review approvals without input proof to recoverable `failed` results. |
@@ -61,6 +61,7 @@ Reconciliation-scoped auto-recover/reclaim events the self-healing sweep surface
 | `task:reconcile-wedged-active-merge` | Self-healing reclaims a wedged single-flight merge entry. |
 | `task:reconcile-stranded-completed-no-action` | A stranded-completed promoter withholds promotion of an all-steps-done/skipped task with a failure-park provenance (no-action). |
 | `task:reconcile-legacy-adoption` | Self-healing startup adopts a pre-cutover legacy task row through the KTD-8 adoption table. |
+| `task:reconcile-archived-into-done` | Self-healing moves a live historical archive row or restores a cold snapshot into the task's workflow completion lane. Metadata is limited to the task ID, source, counters, and a fixed outcome. |
 
 ## Durable-agent error-state
 

@@ -730,7 +730,8 @@ export interface TaskCompletionBlockerOptions {
   /**
    * Resolves a task reference so completion gating can distinguish live blockers
    * from stale `blockedBy` markers. Missing tasks and blockers already in
-   * `done`/`archived` are treated as non-blocking.
+   * their workflow's Complete column are treated as non-blocking; historical-sentinel
+   * rows are absent from ordinary live resolution.
    */
   resolveTask?: (taskId: string) => Promise<Pick<Task, "id" | "column"> | null | undefined>;
   /*
@@ -759,7 +760,7 @@ nothing retries — the card simply never becomes eligible, which is the failure
 program keeps finding.
 
 They are SEPARATE because the two gates genuinely differ: a hard `blockedBy` marker clears only on
-terminal (complete/archived), while a declared dependency also clears once it reaches REVIEW — the
+terminal (complete), while a declared dependency also clears once it reaches REVIEW — the
 work is done even though the merge has not landed. Collapsing them would either strand every
 dependent behind an unmerged dependency or release blocked cards too early.
 */
@@ -769,7 +770,7 @@ function isDependencyTerminal(
 ): boolean {
   const columns = options.satisfactionColumnsByTaskId?.get(dependency.id);
   /* DELIBERATE-LITERAL — the unconverted-caller default, reviewed 2026-07-31-00:20. */
-  if (!columns) return dependency.column === "done" || dependency.column === "archived";
+  if (!columns) return dependency.column === "done";
   return columns.terminal.has(dependency.column);
 }
 
@@ -780,7 +781,7 @@ function isDependencySatisfied(
   const columns = options.satisfactionColumnsByTaskId?.get(dependency.id);
   /* DELIBERATE-LITERAL — the same documented default, reviewed 2026-07-31-00:20. */
   if (!columns) {
-    return dependency.column === "done" || dependency.column === "in-review" || dependency.column === "archived";
+    return dependency.column === "done" || dependency.column === "in-review";
   }
   return columns.terminal.has(dependency.column) || columns.review.has(dependency.column);
 }

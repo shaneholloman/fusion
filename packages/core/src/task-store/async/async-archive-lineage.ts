@@ -5,43 +5,20 @@
  * Async equivalents of the sync SQLite archive and lineage call sites in
  * store.ts and archive-db.ts. These helpers target the PostgreSQL
  * `project.archived_tasks`, `archive.archived_tasks`, `project.tasks`, and the
- * document/artifact tables via Drizzle, and preserve the load-bearing archive
- * and lineage invariants:
- *
- *   VAL-CROSS-014 — Soft-deleting a child task allows its parent to be deleted
- *     (the soft-deleted child no longer blocks). The lineage-integrity gate
- *     (from async-lifecycle) excludes soft-deleted children, so a parent whose
- *     only children are soft-deleted can be deleted immediately.
- *   VAL-CROSS-015 — Archiving a parent task scopes its documents/artifacts out
- *     of live views but preserves them for restore. When a task is archived,
- *     its `task_documents` and `artifacts` rows are retained (the FK is
- *     ON DELETE CASCADE, not ON DELETE SET NULL, so an archive — which is a
- *     soft column move, not a row delete — keeps them). Live document/artifact
- *     views filter by the parent task's live state (`deleted_at IS NULL` and
- *     `column != 'archived'`), so the rows disappear from live views but
- *     remain for an unarchive restore.
- *
- * Transition context (see library/taskstore-persistence-notes.md):
- *   `getDatabase()` still returns the sync `Database` until U15 flips it. The
- *   TaskStore facade keeps its sync archive path (the gate depends on it).
- *   These helpers are the async target the migrating store and the PostgreSQL
- *   integration tests consume. They program against the stable `AsyncDataLayer`
- *   interface (U4), not the underlying driver.
+ * document/artifact tables via Drizzle. Cold snapshot helpers remain for startup
+ * reintegration and forensic compatibility only; no live task-archive operation calls them.
+ * Soft-deleted and historical-sentinel parents stay outside ordinary document/artifact views,
+ * while restoration moves recoverable snapshots directly into Complete.
  */
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { access } from "node:fs/promises";
 import * as schema from "../../postgres/schema/index.js";
 import { projectScopeFor, type AsyncDataLayer, type DbTransaction } from "../../postgres/data-layer.js";
 import { ACTIVE_TASK_FILTER } from "./async-persistence.js";
-import { findLiveLineageChildren, projectPartition, removeLineageReferences, type LineageRemovalOutcome } from "./async-lifecycle.js";
-import { assertLineageCandidatesUnchanged } from "../lineage-approval-invalidation.js";
-import {
-  softDeleteTaskRowInTransaction,
-  readTaskRowInTransaction,
-} from "./async-persistence.js";
+import { projectPartition } from "./async-lifecycle.js";
+import { insertTaskRowInTransaction, readTaskRowInTransaction } from "./async-persistence.js";
+import { acquireTaskAdvisoryXactLock } from "../task-advisory-lock.js";
 import type { ArchivedTaskEntry } from "../../types.js";
-import {acquireTaskAdvisoryXactLock} from "../task-advisory-lock.js";
-import {decideArchiveLiveness, type ArchiveLivenessVerdict} from "../../tasks/task-archive-liveness.js";
 
 /**
  * FNXC:TaskStoreArchiveLineage 2026-06-24-07:10:
@@ -208,109 +185,13 @@ export async function filterArchivedTaskEntries(
 }
 
 /**
- * FNXC:TaskStoreArchiveLineage 2026-06-24-07:20:
- * Archive a parent task atomically: lineage gate, lineage clear, archive
- * snapshot insert, and soft-delete, all in one transaction. This composes the
- * async-lifecycle and async-persistence helpers into the archive path.
- *
- * Behavioral contract (VAL-CROSS-014 + VAL-CROSS-015):
- *   1. **Lineage gate** — if the parent has live children and the caller did
- *      not pass `removeLineageReferences: true`, the archive is rejected
- *      (throws `TaskHasLineageChildrenError`-equivalent by returning the live
- *      child ids). Soft-deleted children are excluded by the gate, so a parent
- *      whose only child was soft-deleted archives immediately (VAL-CROSS-014).
- *   2. **Lineage clear** — when `removeLineageReferences: true`, the live
- *      children's `source_parent_task_id` is cleared so they no longer block.
- *   3. **Archive snapshot** — a cold-storage snapshot is written to
- *      `archive.archived_tasks` for restore (VAL-CROSS-015).
- *   4. **Soft-delete** — the project row is soft-deleted (`deleted_at` set,
- *      `column = 'archived'`). The documents and artifacts rows are retained
- *      (the FK is ON DELETE CASCADE, and a soft-delete is an UPDATE not a
- *      DELETE, so the rows survive). They are scoped out of live views because
- *      the parent task is now archived (VAL-CROSS-015).
- *
- * @param layer The async data layer.
- * @param taskId The task to archive.
- * @param entry The archive snapshot to write (caller builds this from the task).
- * @param options Archive options.
- * @returns The live child ids that blocked the archive (empty if it succeeded),
- *   or `null` if the archive succeeded.
- */
-export async function archiveParentTaskWithLineageGate(
-  layer: AsyncDataLayer,
-  taskId: string,
-  entry: ArchivedTaskEntry,
-  options: { removeLineageReferences?: boolean; now?: string; beforeArchive?: (tx: DbTransaction) => Promise<void>; beforeLineageGate?: () => void | Promise<void>; archivedColumns?: ReadonlySet<string>; revalidateAgainst?: readonly string[]; promptByChildId?: ReadonlyMap<string, string>; evidenceTargetVersionForTest?: (childId: string, computed: number, attempt: number) => number; livenessWipLanes?: ReadonlySet<string> } = {},
-
-): Promise<{ archived: true; lineageOutcome?: LineageRemovalOutcome } | { archived: false; liveChildIds: string[] } | { archived: false; liveVerdict: ArchiveLivenessVerdict }> {
-  const now = options.now ?? new Date().toISOString();
-
-  return layer.transactionImmediate(async (tx) => {
-    /*
-    FNXC:WorkflowLifecycle 2026-08-15-06:35:
-    Admission writers take this same advisory key before changing a task's lane. Re-read and decide
-    under it so a CLI archive cannot win a todo-to-WIP race and destroy an executor's live worktree.
-    */
-    if (options.livenessWipLanes) {
-      await acquireTaskAdvisoryXactLock(tx, layer.projectId, taskId);
-      const live = await readTaskRowInTransaction(tx, taskId, undefined, layer.projectId);
-      const verdict = decideArchiveLiveness({column: String(live?.column ?? ""), status: live?.status as string | null | undefined, wipLanes: options.livenessWipLanes});
-      if (verdict.live) return {archived: false as const, liveVerdict: verdict};
-    }
-    // Test-only barrier is before this operation's single in-transaction lineage read.
-    await options.beforeLineageGate?.();
-    // 1. Lineage gate — check for live children inside the transaction.
-    const liveChildIds = await findLiveLineageChildren(tx, taskId, layer.projectId, options.archivedColumns);
-    if (liveChildIds.length > 0 && !options.removeLineageReferences) {
-      return { archived: false as const, liveChildIds };
-    }
-
-    if (options.removeLineageReferences && options.revalidateAgainst !== undefined) assertLineageCandidatesUnchanged(liveChildIds, options.revalidateAgainst);
-    // 2. Lineage clear only for candidates whose planning locks this attempt holds.
-    const lineageOutcome = options.removeLineageReferences
-      ? await removeLineageReferences(tx, taskId, options.revalidateAgainst ?? liveChildIds, now, layer.projectId, options.promptByChildId, options.evidenceTargetVersionForTest)
-      : { clearedChildIds: [], evidenceVersionByChild: new Map<string, number>(), evidenceUnavailableChildIds: [], evidenceInsertAttempts: 0 };
-
-    /*
-    FNXC:MissionLineageBudget 2026-07-22-15:00:
-    Cross-store intervention recording must happen after the lineage gate but
-    before archival clears the task from live mission recovery. It is part of
-    this transaction, so an archive rollback cannot leave a phantom stop.
-    */
-    await options.beforeArchive?.(tx);
-
-    // 3. Archive snapshot to cold storage (VAL-CROSS-015 — preserves for restore).
-    // FNXC:MultiProjectIsolation 2026-07-12: stamped with the bound project.
-    await upsertArchivedTaskEntry(tx, entry, layer.projectId);
-
-    // 4. Soft-delete the project row. Documents/artifacts are retained because
-    //    this is an UPDATE, not a DELETE — the ON DELETE CASCADE FK does not
-    //    fire. They are scoped out of live views because the parent is now
-    //    archived (column = 'archived', deleted_at IS NOT NULL).
-    //
-    //    HAZARD FIX (runtime-workflow-async): use softDeleteTaskRowInTransaction(tx)
-    //    so the UPDATE participates in this transaction. The previous call used
-    //    softDeleteTaskRow(layer) which bound layer.db and ran OUTSIDE the txn,
-    //    breaking atomicity (a later rollback left the soft-delete persisted).
-    await softDeleteTaskRowInTransaction(tx, taskId, now, false, layer.projectId);
-
-    // Preserve the public legacy success shape for direct callers; only the serialized boundary
-    // supplies revalidation and needs the actual-clear outcome for post-commit reconciliation.
-    return options.revalidateAgainst === undefined
-      ? { archived: true as const }
-      : { archived: true as const, lineageOutcome };
-  });
-}
-
-/**
  * FNXC:TaskStoreArchiveLineage 2026-06-24-07:25:
- * Restore a task from its archive snapshot (the unarchive path). This is the
- * async equivalent of `restoreFromArchive(entry)`. It re-inserts the project
- * row from the snapshot, clears the soft-delete, and removes the cold-storage
- * snapshot (the project row is the source of truth again).
+ * Reintegrate a task from its historical archive snapshot during store open.
+ * It re-inserts the project row from the snapshot, clears historical archive
+ * state, and removes the cold-storage snapshot once the live row is authoritative.
  *
- * Documents and artifacts that were scoped out of live views during the
- * archive re-appear because the parent task is live again (VAL-CROSS-015 —
+ * Documents and artifacts retained with the historical snapshot re-appear
+ * because the parent task is live again (VAL-CROSS-015 —
  * "preserves them for restore").
  *
  * @param layer The async data layer.
@@ -354,33 +235,55 @@ async function reconcileRestoredWorktreeState(
   };
 }
 
+export type RestoreArchivedTaskOutcome = "restored" | "live-won" | "user-paused";
+
+/**
+ * Atomically make one historical cold snapshot subordinate to the live task table.
+ *
+ * FNXC:TaskArchiveRemoval 2026-09-04-19:28:
+ * The one-way archive migration is serialized by the same project/task advisory lock as ordinary
+ * lifecycle mutations. A surviving live row wins a collision, a legacy soft-deleted row is revived,
+ * and a snapshot whose project row was physically removed is recreated from `taskRecord`; only then
+ * is the cold row deleted. User-paused rows retain both representations for a later maintenance pass.
+ */
 export async function restoreTaskFromArchive(
   layer: AsyncDataLayer,
   entry: ArchivedTaskEntry,
-  options: { now?: string } = {},
-): Promise<void> {
+  options: { now?: string; targetColumn?: string; taskRecord?: Record<string, unknown> } = {},
+): Promise<{ outcome: RestoreArchivedTaskOutcome; moved: boolean }> {
   const now = options.now ?? new Date().toISOString();
 
-  await layer.transactionImmediate(async (tx) => {
-    // Clear the soft-delete: set column back from 'archived', clear deleted_at.
-    // The project row may still exist (soft-delete path) or may have been
-    // hard-deleted (cleanup path). Handle both.
-    //
-    // HAZARD FIX (runtime-workflow-async): use readTaskRowInTransaction(tx) so
-    // the read participates in this transaction (consistent snapshot). The
-    // previous call used readTaskRow(layer) which bound layer.db and read
-    // OUTSIDE the txn.
+  return await layer.transactionImmediate(async (tx) => {
+    await acquireTaskAdvisoryXactLock(tx, layer.projectId, entry.id);
     const existing = await readTaskRowInTransaction(tx, entry.id, { includeDeleted: true }, layer.projectId);
+    if (existing?.userPaused) {
+      return { outcome: "user-paused", moved: false };
+    }
+
+    if (existing && !existing.deletedAt) {
+      const moved = existing.column === "archived" && options.targetColumn !== undefined;
+      if (moved) {
+        await tx
+          .update(schema.project.tasks)
+          .set({
+            column: options.targetColumn,
+            columnMovedAt: now,
+            updatedAt: now,
+          })
+          .where(and(
+            eq(schema.project.tasks.projectId, projectPartition(layer.projectId)),
+            eq(schema.project.tasks.id, entry.id),
+          ));
+      }
+      await deleteArchivedTaskEntry(tx, entry.id, layer.projectId);
+      return { outcome: "live-won", moved };
+    }
+
     if (existing) {
       const reconciledWorktreeState = await reconcileRestoredWorktreeState(
         existing.workspaceWorktrees,
         existing.worktree,
       );
-      // Row exists (was soft-deleted). Restore it: clear deleted_at, keep
-      // column as "archived" so the caller (unarchiveTaskImpl) can verify the
-      // task is in the archived column and then moveTask it to the target
-      // column. Setting column to "done" here would break the unarchive guard
-      // ("task is in 'done', must be in 'archived'").
       await tx
         .update(schema.project.tasks)
         .set({
@@ -390,9 +293,10 @@ export async function restoreTaskFromArchive(
           /*
           FNXC:TaskStoreArchiveLineage 2026-08-01-23:23 DELIBERATE-LITERAL — STATE MARKER:
           Restore exposes the durable row before the caller's validated move out of the archive state.
-          This is a physical transition sentinel, not the custom workflow's archived lane id.
+          This is a physical transition sentinel, not a workflow lane id.
           */
-          column: "archived",
+          column: options.targetColumn ?? "archived",
+          ...(options.targetColumn ? { columnMovedAt: now } : {}),
           updatedAt: now,
         })
         .where(and(
@@ -400,15 +304,25 @@ export async function restoreTaskFromArchive(
           eq(schema.project.tasks.id, entry.id),
         ));
     } else {
-      // Row was hard-deleted. We cannot fully reconstruct it from the archive
-      // snapshot alone here (the entry carries the public Task shape, not the
-      // full row). The caller (store.ts unarchive path) handles full
-      // reconstruction via the task-dir files. This helper clears the archive
-      // snapshot so the next read falls through to the project row.
+      if (!options.taskRecord) {
+        throw new Error(`Archived task ${entry.id} has no project row or restoration record`);
+      }
+      await insertTaskRowInTransaction(
+        tx,
+        {
+          ...options.taskRecord,
+          column: options.targetColumn ?? "archived",
+          columnMovedAt: options.targetColumn ? now : options.taskRecord.columnMovedAt,
+          updatedAt: now,
+          deletedAt: undefined,
+        },
+        { lineageId: entry.lineageId },
+        layer.projectId,
+      );
     }
 
-    // Remove the cold-storage snapshot (project row is the source of truth again).
     await deleteArchivedTaskEntry(tx, entry.id, layer.projectId);
+    return { outcome: "restored", moved: true };
   });
 }
 

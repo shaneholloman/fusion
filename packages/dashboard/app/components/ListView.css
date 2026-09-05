@@ -759,11 +759,6 @@ rows while preserving their existing badge geometry.
   background: var(--status-done-bg);
   color: var(--done);
 }
-.list-status-badge--archived {
-  background: var(--status-archived-bg);
-  color: var(--text-muted);
-}
-
 .list-status-badge--reverted {
   background: color-mix(in srgb, var(--text-muted) 12%, transparent);
   color: var(--text-muted);

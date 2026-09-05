@@ -289,7 +289,7 @@ looks; inline in the conditional it was attached to the wrong node and scored as
 guards (86 -> 89 on #2883).
 */
 function isDependencySatisfiedWithoutWorkflowMetadata(column: string): boolean {
-  return column === "done" || column === "archived" || column === "in-review";
+  return column === "done" || column === "in-review";
 }
 /*
 DELIBERATE-LITERAL — legacy complete-lane fallback for the FN-9056 orphaned-workspace-worktree
@@ -354,9 +354,9 @@ type BranchGroupLandingRecorder = {
 
 /*
 FNXC:CodeOrganization 2026-08-10-03:45:
-archiveAsGhostBug / autoRecoverWorktreeSessionStartFailure peeled to self-healing/ (U5 wave19).
+Ghost-bug cleanup / autoRecoverWorktreeSessionStartFailure peeled to self-healing/ (U5 wave19).
 */
-export { archiveAsGhostBug } from "./self-healing/archive-ghost-bug.js";
+export { softDeleteAsGhostBug } from "./self-healing/delete-ghost-bug.js";
 export { autoRecoverWorktreeSessionStartFailure } from "./self-healing/auto-recover-worktree-session.js";
 import { autoRecoverWorktreeSessionStartFailure } from "./self-healing/auto-recover-worktree-session.js";
 import {
@@ -702,18 +702,6 @@ async function resolveNoOpFinalizeGateIds(store: TaskStore, task: Task): Promise
 }
 export { classifyTransientMergeError } from "./errors/transient-merge-error-classifier.js";
 const MAX_STARVATION_DROPS = 3;
-type AutoArchiveFailureReason = "lineage-children" | "task-live" | "dependents" | "not-found" | "unknown";
-
-function classifyAutoArchiveFailure(err: unknown): AutoArchiveFailureReason {
-  if (!(err instanceof Error)) return "unknown";
-  switch (err.name) {
-    case "TaskHasLineageChildrenError": return "lineage-children";
-    case "TaskIsLiveError": return "task-live";
-    case "TaskHasDependentsError": return "dependents";
-    case "TaskNotFoundError": return "not-found";
-    default: return "unknown";
-  }
-}
 /*
 FNXC:Workspace 2026-08-15-05:13:
 Failed workspace tasks are routinely retried with their progress preserved. Terminal teardown therefore
@@ -847,14 +835,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
   // ── Per-task deadlock recovery cooldown ─────────────────────────────
   private deadlockRecoveryCooldown: Map<string, number> = new Map();
   private mergeStarvationDrops: Map<string, number> = new Map();
-  /*
-  FNXC:SelfHealing 2026-08-20-08:08:
-  Runfusion/Fusion#3497 requires a process-scoped budget for stale-archive failures: repeating a
-  permanent refusal floods logs and obscures actionable failures. Restarting gets a fresh budget
-  because an operator may have repaired the cause; the one-shot durable escalation carries the
-  unresolved finding across restarts.
-  */
-  private readonly autoArchiveFailures: Map<string, { count: number; signature: AutoArchiveFailureReason }> = new Map();
   /*
   FNXC:Workspace 2026-08-15-04:42:
   The partial-land reconciler separately bounds rejected merge enqueues and unavailable branch
@@ -1322,22 +1302,14 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
   */
   /*
   FNXC:Workspace 2026-08-15-04:11:
-  Archive is cold storage, but `getTask` serves its snapshot as an archived-column task. An archived
-  or soft-deleted owner cannot be running, while this in-memory registry retains a leaked land lease
-  until process exit. Resolve archive columns with the workflow vocabulary and treat them as terminal;
-  the unchanged age, merge-pending, and executing guards still prevent reclaiming a live land.
-
-  Non-terminal states must continue to read LIVE. The column sets are resolved once by the async
-  caller because this predicate remains synchronous.
+  A soft-deleted owner cannot be running, while this in-memory registry retains a leaked land lease until process exit. Complete and deleted states are resolved once by the async caller; all non-terminal states remain live.
   */
   private workspaceOwnerTerminalReason(
     owner: Task | null | undefined,
     completeColumns: ReadonlySet<string>,
-    archivedColumns: ReadonlySet<string>,
-  ): "missing" | "complete" | "archived" | "deleted" | "failed" | null {
+  ): "missing" | "complete" | "deleted" | "failed" | null {
     if (!owner) return "missing";
     if (completeColumns.has(owner.column)) return "complete";
-    if (archivedColumns.has(owner.column)) return "archived";
     if (typeof owner.deletedAt === "string" && owner.deletedAt.length > 0) return "deleted";
     if (owner.status === "failed") return "failed";
     return null;
@@ -1346,9 +1318,8 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
   private isWorkspaceOwnerLive(
     owner: Task | null | undefined,
     completeColumns: ReadonlySet<string>,
-    archivedColumns: ReadonlySet<string>,
   ): boolean {
-    return this.workspaceOwnerTerminalReason(owner, completeColumns, archivedColumns) === null;
+    return this.workspaceOwnerTerminalReason(owner, completeColumns) === null;
   }
 
   private async evaluateBackwardMoveTripleProof(
@@ -1793,7 +1764,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         lanes?.hold ?? "todo",
         lanes?.review ?? "in-review",
         lanes?.complete ?? "done",
-        lanes?.archived ?? "archived",
       ]);
       if (
         from === wipLane
@@ -1824,28 +1794,25 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       blockers that make the sync path inert (`sync-workflow-ir-second-blocker.test.ts`).
 
       What this fixes, on every renamed board: a card entering the board's own review lane never had
-      its branch rebound, and a card reaching the board's own complete or archive lane never ran the
+      its branch rebound, and a card reaching the board's own Complete lane never ran the
       completion fan-out — so its worktree was never reclaimed and its dependents kept a `blockedBy`
       pointing at a blocker that had already finished.
       */
       void (async () => {
         /* One await, not three: the fan-out is fire-and-forget, so its deferral is unobservable, but
            there is no reason to add microtasks the resolution does not need. */
-        const [review, complete, archived] = await Promise.all([
+        const [review, complete] = await Promise.all([
           resolveProjectColumnsForRoles(this.store, REVIEW_ROLES),
           resolveProjectColumnsForRoles(this.store, ["complete"]),
-          resolveProjectColumnsForRoles(this.store, ["archived"]),
         ]);
-        const lanes = { review, complete, archived };
+        const lanes = { review, complete };
         if (lanes.review.has(to)) {
           await this.reconcileInReviewBranchRebind({ includeTaskIds: new Set([task.id]) }).catch((err: unknown) => {
             const errorMessage = err instanceof Error ? err.message : String(err);
             log.warn(`[self-healing] task:moved in-review rebind failed for ${task.id}: ${errorMessage}`);
           });
         }
-        const shouldReconcile =
-          (lanes.review.has(from) && lanes.complete.has(to)) ||
-          (lanes.complete.has(from) && lanes.archived.has(to));
+        const shouldReconcile = lanes.review.has(from) && lanes.complete.has(to);
         if (!shouldReconcile) return;
         await this.reconcileCompletedTask(task.id, { worktreeHint: task.worktree ?? undefined }).catch((err: unknown) => {
           const errorMessage = err instanceof Error ? err.message : String(err);
@@ -1896,6 +1863,13 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       // legacy `planning`/`needs-replan` row is judged by recovery rules that no longer
       // have a writer for that status.
       { name: "adopt-legacy-task-rows", fn: () => this.adoptLegacyTaskRows().then(() => undefined) },
+      /*
+      FNXC:TaskArchiveRemoval 2026-09-04-19:28:
+      Legacy status adoption remains first. Immediately afterward, drain one bounded archive page so
+      all later column classifiers see restored tasks in their workflow completion lane, never in the
+      removed archive role. Periodic maintenance repeats the same idempotent pass until it is empty.
+      */
+      { name: "reconcile-archived-tasks-into-done", fn: () => this.reconcileArchivedTasksIntoDone().then(() => undefined) },
       // FNXC:WorkflowColumns 2026-07-26-18:30: immediately after status adoption and before every
       // column-reasoning step below — a row in an undeclared column carries NO trait flags, so each
       // of those steps would silently classify it as "not my case" and leave it stranded.
@@ -2038,6 +2012,33 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       }
       await yieldEventLoop();
     }
+  }
+
+  /** Rehome one bounded page of historical task archive state into Done. */
+  async reconcileArchivedTasksIntoDone(): Promise<number> {
+    const result = await this.store.reconcileArchivedTasksIntoDone({
+      limit: 200,
+      maxFailureAttempts: MAX_STARVATION_DROPS,
+    });
+    for (const item of result.outcomes) {
+      if (item.outcome === "failed") continue;
+      await emitBoundedRunAudit(this.store, {
+        taskId: item.taskId,
+        agentId: "self-healing",
+        runId: generateSyntheticRunId("reconcile-archived-into-done", item.taskId),
+        domain: "database",
+        mutationType: "task:reconcile-archived-into-done",
+        target: item.taskId,
+        metadata: {
+          taskId: item.taskId,
+          source: item.source,
+          movedCount: item.source === "live-column" && item.outcome === "moved" ? 1 : 0,
+          restoredCount: item.source === "cold-storage" && item.outcome === "restored" ? 1 : 0,
+          outcome: item.outcome,
+        },
+      }, { log });
+    }
+    return result.movedCount + result.restoredCount;
   }
 
   async reconcileEngineDowntimeActiveTiming(
@@ -2931,6 +2932,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         // Batch 2 — Task recovery (operations are independent of each other)
         const maintenanceSurfacing = this.surfacingCycleMemo();
         const batch2Fns: Array<{ name: string; fn: () => Promise<unknown> }> = [
+          { name: "reconcile-archived-tasks-into-done", fn: () => this.reconcileArchivedTasksIntoDone() },
           {
             name: "recover-active-mission-validations",
             fn: async () => {
@@ -3089,19 +3091,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         }
       }
 
-      // Batch 3 — Archive (runs after recovery so we don't archive recoverable tasks)
-      const batch3Fns: Array<{ name: string; fn: () => Promise<unknown> }> = [
-        { name: "archive-stale-done", fn: () => this.archiveStaleDoneTasks() },
-      ];
-      for (const fn of batch3Fns) {
-        try {
-          await fn.fn();
-          log.debug(`Maintenance batch 3 step "${fn.name}" succeeded`);
-        } catch (stepErr) {
-          log.error(`Maintenance batch 3 step "${fn.name}" failed: ${stepErr instanceof Error ? stepErr.message : String(stepErr)}`);
-        }
-        await yieldEventLoop();
-      }
 
       const elapsedMs = Date.now() - startMs;
       log.debug(`Maintenance cycle completed in ${elapsedMs}ms`);
@@ -3110,175 +3099,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
     }
   }
 
-  // ── Auto-archive of stale done tasks ──────────────────────────────
-
-  /**
-   * Auto-archive done tasks older than the project retention setting so the
-   * active task database does not accumulate completed task payloads forever.
-   * Archived task metadata is retained in the separate archive database and can
-   * be restored by unarchiving.
-   */
-  private static readonly AUTO_ARCHIVE_AFTER_MS = 48 * 60 * 60 * 1000;
-
-  async archiveStaleDoneTasks(): Promise<number> {
-    try {
-      const settings = await this.store.getSettings();
-      const doneAutoArchiveDaysRaw = settings.doneAutoArchiveDays;
-      const doneAutoArchiveDaysNumber = Number(doneAutoArchiveDaysRaw);
-      const doneAutoArchiveDays =
-        Number.isFinite(doneAutoArchiveDaysNumber) && Number.isInteger(doneAutoArchiveDaysNumber) && doneAutoArchiveDaysNumber > 0
-          ? doneAutoArchiveDaysNumber
-          : 0;
-      if (settings.autoArchiveDoneTasksEnabled === false && doneAutoArchiveDays === 0) {
-        return 0;
-      }
-      const archiveAfterMs = doneAutoArchiveDays > 0
-        ? doneAutoArchiveDays * 24 * 60 * 60 * 1000
-        : (settings.autoArchiveDoneAfterMs ?? SelfHealingManager.AUTO_ARCHIVE_AFTER_MS);
-      if (!Number.isFinite(archiveAfterMs) || archiveAfterMs <= 0) {
-        return 0;
-      }
-
-      // Slim listing — we only need id/column/columnMovedAt/updatedAt to decide
-      // staleness. Pulling full task payloads (logs, comments, steps) here used
-      // to drag in tens of MB on busy boards and stalled the maintenance loop.
-      const tasks = await this.store.listTasks({ slim: true, includeArchived: false });
-      const now = Date.now();
-      const cutoff = now - archiveAfterMs;
-
-      // Build a set of task IDs that have at least one *active* dependent —
-      // i.e., another task in triage/todo/in-progress/in-review that lists
-      // this ID in its `dependencies`. Archiving such a task wipes
-      // `.fusion/tasks/{id}/` on disk, which downstream agents are told they
-      // may read for sibling-spec context (executor prompt). Done/archived
-      // dependents have already consumed the spec and don't block.
-      const tasksWithActiveDependents = new Set<string>();
-      /*
-      FNXC:WorkflowResolvedColumns 2026-07-31-10:40 (fleet phase — self-healing terminal-lane cluster):
-      "Has this card finished?" asked by id skips every renamed board, so the sweep silently treats a
-      finished card as live. Resolved once per sweep via the project union — over-inclusion is free
-      here because the per-card check below still discards, and the union needs no per-task workflow
-      selection (docs/solutions/workflow-learnings/project-union-versus-per-task-lanes.md).
-      */
-      const dependentTerminalColumns = await resolveProjectColumnsForRoles(this.store, TERMINAL_ROLES);
-      // FNXC:SelfHealing 2026-08-20-08:02:
-      // Runfusion/Fusion#3497 found this retention sweep reissuing TaskHasLineageChildrenError every
-      // interval. Archive lanes alone mirror the store guard: a complete child still preserves lineage,
-      // while clearing sourceParentTaskId via removeLineageReferences is destructive provenance editing
-      // that retention automation is not authorized to perform.
-      const archivedColumns = await resolveProjectColumnsForRoles(this.store, ["archived"])
-        .catch(() => new Set<string>());
-      const tasksWithLiveLineageChildren = new Map<string, string[]>();
-      for (const t of tasks) {
-        if (!dependentTerminalColumns.has(t.column)) {
-          for (const depId of t.dependencies ?? []) {
-            tasksWithActiveDependents.add(depId);
-          }
-        }
-        if (
-          !archivedColumns.has(t.column)
-          && typeof t.sourceParentTaskId === "string"
-          && t.sourceParentTaskId.length > 0
-        ) {
-          const children = tasksWithLiveLineageChildren.get(t.sourceParentTaskId) ?? [];
-          children.push(t.id);
-          tasksWithLiveLineageChildren.set(t.sourceParentTaskId, children);
-        }
-      }
-
-      /*
-      FNXC:WorkflowResolvedColumns 2026-07-31-10:55 (fleet phase): the COMPLETE role, not the terminal
-      pair — this sweep archives finished cards, so an already-archived one is not a candidate.
-      */
-      const doneColumns = await resolveProjectColumnsForRoles(this.store, ["complete"]);
-      const stale = tasks.filter((t) => {
-        if (!doneColumns.has(t.column)) return false;
-        // Prefer columnMovedAt (when the task entered done); fall back to updatedAt
-        // for legacy tasks that lack the field.
-        const ts = t.columnMovedAt || t.updatedAt;
-        const movedAt = ts ? Date.parse(ts) : NaN;
-        if (!Number.isFinite(movedAt)) return false;
-        if (movedAt >= cutoff) return false;
-        if (tasksWithActiveDependents.has(t.id)) {
-          log.debug(`Skipping auto-archive of ${t.id}: has active dependents`);
-          return false;
-        }
-        const lineageChildren = tasksWithLiveLineageChildren.get(t.id);
-        if (lineageChildren) {
-          log.debug(`Skipping auto-archive of ${t.id}: has live lineage children ${lineageChildren.join(", ")}`);
-          return false;
-        }
-        return true;
-      });
-
-      const staleTaskIds = new Set(stale.map((task) => task.id));
-      for (const taskId of this.autoArchiveFailures.keys()) {
-        if (!staleTaskIds.has(taskId)) this.autoArchiveFailures.delete(taskId);
-      }
-      if (stale.length === 0) return 0;
-
-      log.debug(`Auto-archiving ${stale.length} done task(s) older than ${archiveAfterMs}ms`);
-
-      let archived = 0;
-      const thresholdDays = Math.floor(archiveAfterMs / 86_400_000);
-      for (const task of stale) {
-        if ((this.autoArchiveFailures.get(task.id)?.count ?? 0) >= MAX_STARVATION_DROPS) continue;
-        try {
-          await this.store.archiveTaskAndCleanup(task.id);
-          this.autoArchiveFailures.delete(task.id);
-          archived++;
-          const ts = task.columnMovedAt || task.updatedAt;
-          const movedAt = ts ? Date.parse(ts) : NaN;
-          const ageDays = Number.isFinite(movedAt) ? Math.floor((now - movedAt) / 86_400_000) : 0;
-          log.debug(`auto-archive: archived ${task.id} (age ${ageDays}d, threshold ${thresholdDays}d)`);
-        } catch (err: unknown) {
-          const reason = classifyAutoArchiveFailure(err);
-          const prior = this.autoArchiveFailures.get(task.id);
-          const count = prior?.signature === reason ? prior.count + 1 : 1;
-          this.autoArchiveFailures.set(task.id, { count, signature: reason });
-          if (count < MAX_STARVATION_DROPS) {
-            log.warn(`Failed to auto-archive ${task.id} (${count}/${MAX_STARVATION_DROPS}, ${reason})`);
-          } else {
-            log.error(`Auto-archive abandoned for ${task.id} after ${count}/${MAX_STARVATION_DROPS} failures (${reason})`);
-            /*
-            FNXC:SelfHealing 2026-08-20-08:13:
-            This one-shot log entry makes an abandoned retention action visible to operators. It bumps
-            updatedAt, but modern stale rows use columnMovedAt; legacy rows move out of retention once,
-            and the exhausted in-memory budget prevents further archive attempts or repeated escalation.
-            */
-            const remedy = reason === "lineage-children"
-              ? "Archive or unlink the referencing child, or use fn_task_archive with removeLineageReferences: true."
-              : "Inspect the task and resolve the reported archive guard before retrying manually.";
-            try {
-              await this.store.logEntry(
-                task.id,
-                `[self-healing] Auto-archive abandoned after ${count} consecutive ${reason} failures. ${remedy}`,
-              );
-            } catch (logErr: unknown) {
-              log.warn(`Could not record auto-archive escalation for ${task.id}: ${logErr instanceof Error ? logErr.message : String(logErr)}`);
-            }
-            await emitBoundedRunAudit(this.store, {
-              taskId: task.id,
-              agentId: "self-healing",
-              runId: generateSyntheticRunId("self-heal-auto-archive-exhausted", task.id),
-              domain: "database",
-              mutationType: "task:auto-archive-failure-budget-exhausted",
-              target: task.id,
-              metadata: { taskId: task.id, attempts: count, maxAttempts: MAX_STARVATION_DROPS, reason },
-            }, { log });
-          }
-        }
-      }
-
-      if (archived > 0) {
-        log.debug(`Auto-archived ${archived} stale done task(s)`);
-      }
-      return archived;
-    } catch (err: unknown) { const errorMessage = err instanceof Error ? err.message : String(err);
-      log.error(`Auto-archive sweep failed: ${errorMessage}`);
-      return 0;
-    }
-  }
 
   // ── Completed task recovery ──────────────────────────────────────
 
@@ -4941,7 +4761,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             });
             await this.store.logEntry(
               task.id,
-              `[recovery] resume-limbo-escalated ${task.id} moved to todo after ${resumeAttemptCount} no-progress reclaim/resume attempts`,
+              `[recovery] resume-limbo-escalated ${task.id} repaired in place after ${resumeAttemptCount} no-progress reclaim/resume attempts`,
               JSON.stringify({
                 frozenTipSha: inspection.tipSha,
                 idleMs,
@@ -5142,12 +4962,9 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
 
   async reclaimStaleActiveBranches(): Promise<number> {
     /*
-    FNXC:WorkflowLifecycleColumns 2026-07-31-22:30 (self-healing cluster): an archived card must not have its branch reclaimed, whatever that lane is named. Keyed on the literal this sweep answered "no" for every card on a renamed board.
-
     FNXC:StaleActiveBranchDoneSpam 2026-08-03-01:47:
-    Complete-lane cards used to hit the unique-commit rescue-needed warn every maintenance sweep after squash/AI merge (feature tip SHAs are not ancestors of main). That spam was not actionable — the work already landed — and left local fusion/* refs forever. Resolve complete columns and force-delete their stale branches once the no-worktree / no-session gates pass; keep rescue-needed only for non-terminal columns where unique commits may still be real unmerged work. Archived still skips entirely (archive cleanup owns those refs).
+    Complete-lane cards used to hit the unique-commit rescue-needed warning every maintenance sweep after squash/AI merge. Resolve complete columns and force-delete their stale branches once the no-worktree and no-session gates pass; keep rescue-needed only for non-terminal columns where unique commits may still be real unmerged work.
     */
-    const reclaimArchivedColumns = await resolveProjectColumnsForRoles(this.store, ["archived"]);
     const reclaimCompleteColumns = await resolveProjectColumnsForRoles(this.store, ["complete"]);
     try {
       const settings = await this.store.getSettings();
@@ -5184,7 +5001,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         .filter(Boolean);
       if (branches.length === 0) return 0;
 
-      const tasks = await this.store.listTasks({ slim: true, includeArchived: true });
+      const tasks = await this.store.listTasks({ slim: true, includeArchived: false });
       const taskById = new Map(tasks.map((task) => [task.id.toUpperCase(), task]));
 
       let reclaimed = 0;
@@ -5193,7 +5010,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         if (!derivedTaskId) continue;
 
         const task = taskById.get(derivedTaskId.toUpperCase());
-        if (!task || reclaimArchivedColumns.has(task.column) || task.checkedOutBy || task.userPaused) continue;
+        if (!task || task.checkedOutBy || task.userPaused) continue;
         if (task.pausedReason === "worktrunk_operation_failed") {
           log.debug(`[self-healing] skipping worktrunk-paused task ${task.id}`);
           continue;
@@ -5344,7 +5161,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
    *
    * Stale-blocker conditions (clear if ANY apply):
    * 1. Blocker task does not exist (id missing entirely)
-   * 2. Blocker `column === "done"` or `column === "archived"`
+   * 2. Blocker is in its workflow's completion column
    * 3. Blocker `column === "in-review"` and `paused === true`
    * 4. Blocker `column === "in-review"` and `status === "failed"`
    *    and `(mergeRetries ?? 0) >= MAX_AUTO_MERGE_RETRIES`
@@ -5408,7 +5225,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
 
       const task = await this.store.getTask(taskId);
       await this.reconcileTaskWorktreeMetadata({ includeTaskIds: new Set([taskId]) });
-      const allTasks = await this.store.listTasks({ slim: true, includeArchived: true });
+      const allTasks = await this.store.listTasks({ slim: true, includeArchived: false });
       const taskById = new Map(allTasks.map((t) => [t.id, t]));
       const overlapIgnorePaths = settings.overlapIgnorePaths ?? [];
       const filteredScopeByTaskId = new Map<string, string[]>();
@@ -5554,11 +5371,9 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       for (const dependent of dependents) {
         try {
           /*
-          A dependency is SATISFIED once it reaches a complete, review or archived lane — resolved per
-          DEPENDENCY, since a dependency routinely belongs to a different workflow than the card waiting
-          on it (the answer main settled on in branch-group-ops, #2720). Legacy ids unioned, because
-          `resolveWorkflowIrForTask` returns the built-in IR for a missing workflow and without the union
-          a degraded board reads a finished dependency as unmet — the exact stall being cleared here.
+          This completion fan-out considers Complete plus the bounded review roles accepted by its shared
+          scheduler resolver. Resolution is per dependency because dependencies may use different workflows;
+          degraded metadata falls back to built-in Complete/Review ids.
           */
           /*
           FNXC:WorkflowResolvedColumns 2026-07-30-21:40 (#2883 review — greptile P1, "overbroad
@@ -6513,7 +6328,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           target: candidate.id,
           metadata: { previousColumn: candidate.previousColumn },
         });
-        log.log(`[self-heal] reconcile-soft-delete-column-drift: ${candidate.id} previous=${candidate.previousColumn} → archived`);
+        log.log(`[self-heal] reconcile-soft-delete-column-drift: ${candidate.id} previous=${candidate.previousColumn} → historical sentinel`);
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -6628,7 +6443,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         return 0;
       }
 
-      const allTasks = await this.store.listTasks({ includeArchived: true });
+      const allTasks = await this.store.listTasks({ includeArchived: false });
       const taskById = new Map(allTasks.map((task) => [task.id, task]));
 
 
@@ -6777,7 +6592,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       clear.
       */
       const laneIrCache = new Map<string, Awaited<ReturnType<typeof resolveWorkflowIrForTask>>>();
-      const lanesById = new Map<string, { complete: Set<string>; archived: Set<string>; hold: Set<string>; review: Set<string> }>();
+      const lanesById = new Map<string, { complete: Set<string>; hold: Set<string>; review: Set<string> }>();
       const referencedIds = new Set<string>();
       for (const task of candidates.values()) {
         if (task.blockedBy) referencedIds.add(task.blockedBy);
@@ -6788,7 +6603,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       for (const refId of referencedIds) {
         const lanes = {
           complete: new Set<string>(["done"]),
-          archived: new Set<string>(["archived"]),
           hold: new Set<string>(["todo"]),
           review: new Set<string>(["in-review"]),
         };
@@ -6796,7 +6610,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           const ir = await resolveWorkflowIrForTask(this.store, refId, laneIrCache);
           if (ir) {
             for (const id of columnsWithFlag(ir, "complete")) lanes.complete.add(id);
-            for (const id of columnsWithFlag(ir, "archived")) lanes.archived.add(id);
             for (const id of columnsWithFlag(ir, "hold")) lanes.hold.add(id);
             for (const flag of ["mergeOrchestration", "mergeBlocker", "humanReview"] as const) {
               for (const id of columnsWithFlag(ir, flag)) lanes.review.add(id);
@@ -6806,7 +6619,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         lanesById.set(refId, lanes);
       }
       const lanesOf = (id: string) => lanesById.get(id) ?? {
-        complete: new Set(["done"]), archived: new Set(["archived"]),
+        complete: new Set(["done"]),
         hold: new Set(["todo"]), review: new Set(["in-review"]),
       };
 
@@ -6820,7 +6633,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           // treated as resolved here by design.
           if (!dep || dep.deletedAt) return false;
           const depLanes = lanesOf(depId);
-          return !depLanes.complete.has(dep.column) && !depLanes.review.has(dep.column) && !depLanes.archived.has(dep.column);
+          return !depLanes.complete.has(dep.column) && !depLanes.review.has(dep.column);
         });
         const observedOverlapBlockerId = task.overlapBlockedBy;
         const freshOverlapBlocker = typeof observedOverlapBlockerId === "string" && observedOverlapBlockerId.trim().length > 0
@@ -6887,9 +6700,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           } else if (lanesOf(blocker.id).complete.has(blocker.column)) {
             reasonCode = "blocker-done";
             reason = `blocker ${blockerId} is done`;
-          } else if (lanesOf(blocker.id).archived.has(blocker.column)) {
-            reasonCode = "blocker-archived";
-            reason = `blocker ${blockerId} is archived`;
           } else if (lanesOf(blocker.id).hold.has(blocker.column)) {
             reasonCode = "blocker-moved-todo";
             reason = `blocker ${blockerId} moved to todo`;
@@ -7495,19 +7305,9 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
   /** Repair legacy dependency residue before it can re-enter executor dispatch. */
   async reconcileMissingDependencies(): Promise<number> {
     let repaired = 0;
-    const archivedColumns = new Set(await Promise.resolve()
-      .then(() => resolveProjectColumnsForRoles(this.store, ["archived"]))
-      .catch(() => new Set<string>()));
-    archivedColumns.add("archived");
     const tasks = await this.store.listTasks({ slim: true, includeArchived: false });
     for (const snapshot of tasks) {
-      /*
-      FNXC:DependencyIntegrity 2026-09-05-22:04:
-      Runfusion/Fusion#3565 requires archived history to stay outside this mutable repair pass.
-      Archiving tombstones the live dependent, while archived dependencies resolve as terminal tasks
-      rather than dangling references.
-      */
-      if (snapshot.deletedAt || archivedColumns.has(snapshot.column)) continue;
+      if (snapshot.deletedAt) continue;
       if (!snapshot.dependencies.length || snapshot.userPaused || snapshot.paused || snapshot.autoMerge === false) continue;
       const livePaths = activeSessionRegistry.pathsForTask(snapshot.id);
       const liveExecution = livePaths.some((path) => activeSessionRegistry.isPathActive(path))
@@ -7755,7 +7555,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
 
   /**
    * FN-5092 watchdog: detect and repair tasks left in an impossible state where
-   * `column ∈ {done, archived}` but `status ∈ {merging, merging-pr}`.
+   * a workflow Complete column still carries `status ∈ {merging, merging-pr}`.
    *
    * Cause: a recovery path (FN-4499 misbinding, FN-4500 already-on-main, manual
    * finalization) moved the task to done WITHOUT going through the merger's
@@ -7777,9 +7577,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       queue. Two literal reads meant that on a renamed board the stale status was never cleared, so one
       finished card blocked the queue for every task behind it.
 
-      ONE union read, not two buckets: unlike the sweeps before it, nothing here treats complete and
-      archived differently — the only filter is on `status` — so splitting them would add a distinction
-      the code does not make. Deduped, because the two roles can share a column (the P1 on #2879).
+      Read every workflow Complete column and dedupe by task id before checking status.
       */
       const terminalColumns = await resolveProjectColumnsForRoles(this.store, TERMINAL_ROLES);
       const terminalById = new Map<string, Task>();
@@ -7817,7 +7615,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         }
       }
       if (cleared > 0) {
-        log.warn(`Cleared ${cleared} stale merger-status leak${cleared === 1 ? "" : "s"} on done/archived tasks (FN-5092)`);
+        log.warn(`Cleared ${cleared} stale merger-status leak${cleared === 1 ? "" : "s"} on completed tasks (FN-5092)`);
       }
       return cleared;
     } catch (err: unknown) {
@@ -8475,20 +8273,17 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         try {
           /*
           FNXC:StrandedContinuationReclaim 2026-08-11-09:12:
-          `getTask` must see soft-deleted and archived rows, because those are precisely the tasks whose
-          continuations need retiring. A reader that hides them reports `task-missing`, which retires the
+          `getTask` must see soft-deleted rows because their continuations need retiring. A reader that hides them reports `task-missing`, which retires the
           row too — the same disposition, so the sweep stays correct either way.
           */
           const task = await this.store.getTask(item.taskId);
           const terminalColumns = await resolveTaskLifecycleColumns(this.store, item.taskId).catch(() => undefined);
           const doneColumn = terminalColumns?.complete ?? "done";
-          const archivedColumn = terminalColumns?.archived ?? "archived";
           const verdict = evaluateStrandedContinuationReclaim({
             item,
             taskMissing: !task,
             taskTerminal: !!task && (
               task.deletedAt != null
-              || task.column === archivedColumn
               || task.column === doneColumn
             ),
             taskPaused: task?.userPaused === true || task?.paused === true,
@@ -8597,7 +8392,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
   is what makes the next unknown strand diagnosable in one query instead of an archaeology session.
 
   A card counts as stalled when ALL hold:
-    - it is in a non-terminal column (done/archived are finished, not waiting),
+    - it is outside every workflow Complete column,
     - nothing is executing it (executing set + executingTaskLock + live session registry),
     - it has no ACTIVE workflow continuation queued to resume it,
     - it is not paused (an operator park is a deliberate wait, not a stall),
@@ -11494,7 +11289,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       /* FNXC:Workspace 2026-08-15-12:00: durable rows must be swept even on a
          node with no local registry entries; local state cannot represent peers. */
       const leaseOwnerCompleteColumns = await resolveProjectColumnsForRoles(this.store, ["complete"]);
-      const leaseOwnerArchivedColumns = await resolveProjectColumnsForRoles(this.store, ["archived"]);
 
       const graceMs = settings.taskStuckTimeoutMs ?? STALE_ACTIVE_BRANCH_EXECUTION_GRACE_MS;
       const staleFloorMs = graceMs * PHANTOM_EXECUTOR_BINDING_AGE_MULTIPLIER;
@@ -11547,9 +11341,9 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
 
           const owner = await this.store.getTask(entry.taskId).catch(() => null);
           const ownerColumn = owner?.column ?? "deleted";
-          const ownerTerminalReason = this.workspaceOwnerTerminalReason(owner, leaseOwnerCompleteColumns, leaseOwnerArchivedColumns);
-          // Only a DEMONSTRABLY TERMINAL owner's lease is reclaimed (review C fix).
-          if (this.isWorkspaceOwnerLive(owner, leaseOwnerCompleteColumns, leaseOwnerArchivedColumns)) continue;
+          const ownerTerminalReason = this.workspaceOwnerTerminalReason(owner, leaseOwnerCompleteColumns);
+          // Only a demonstrably terminal owner's lease is reclaimed.
+          if (this.isWorkspaceOwnerLive(owner, leaseOwnerCompleteColumns)) continue;
 
           activeSessionRegistry.unregisterPath(entry.path);
           const acquire = entry.kind === "workspace-repo-acquire";
@@ -11580,7 +11374,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
   /*
   FNXC:PlanningEvacuation 2026-07-25-23:00 (pre-execution worktree sweep):
   Planning acquires the task's own worktree, so cards that never reach execution would accumulate
-  worktrees on disk: withdrawn to an intake column, archived from a planner lane, or simply parked.
+  worktrees on disk: withdrawn to an intake column, soft-deleted from a planner lane, or simply parked.
   This sweep reclaims them.
 
   Candidates are addressed from task ROWS (never a directory walk — AGENTS.md forbids unbounded temp
@@ -11678,7 +11472,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       const settings = await this.store.getSettings();
       if (settings.globalPause || settings.enginePaused) return 0;
       const now = Date.now();
-      const archivedColumns = new Set(await resolveProjectColumnsForRoles(this.store, ["archived"]));
       // One forensic read includes deleted and live rows: live claimants must veto destructive cleanup.
       const allRows = await this.store.listTasks({ slim: true, includeDeleted: true });
       const completeColumns = new Set(await resolveProjectColumnsForRoles(this.store, ["complete"]));
@@ -11693,7 +11486,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       const candidates: Candidate[] = [];
       for (const task of allRows) {
         if (!isWorkspaceTask(task)) continue;
-        if (archivedColumns.has(task.column)) continue;
         /*
         FNXC:Workspace 2026-08-15-06:11:
         Complete-lane placement proves no retry floor is needed, not that ownership has ended. Every
@@ -11929,9 +11721,8 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       done card's metadata was never repaired, so a completed task could keep pointing at a commit that
       is not the one that landed.
 
-      `complete` only, NOT the terminal union: an ARCHIVED card is out of scope here, and widening to
-      TERMINAL_ROLES would start repairing metadata on rows nobody is reading — a behaviour change
-      wearing a conversion's clothes.
+      Complete-only rows are live board history. Soft-deleted and historical-sentinel rows stay out
+      of merge-metadata recovery.
       */
       const doneMetaColumns = await resolveProjectColumnsForRoles(this.store, ["complete"]);
       const doneMetaById = new Map<string, Task>();
@@ -16850,13 +16641,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
 
   private async maintainTaskFts(): Promise<void> {
     await this.maintainLiveTaskFts();
-
-    try {
-      await this.maintainArchiveTaskFts();
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      log.error(`Archive FTS maintenance failed: ${errorMessage}`);
-    }
   }
 
   private async maintainLiveTaskFts(): Promise<void> {
@@ -16873,16 +16657,6 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
     return;
   }
 
-  private async maintainArchiveTaskFts(): Promise<void> {
-    /*
-     * FNXC:SqliteFinalRemoval 2026-06-26-16:10:
-     * VAL-REMOVAL-005 — The SQLite-only archive full-text-search index
-     * maintenance was removed (same rationale as maintainLiveTaskFts above).
-     * PostgreSQL's archive tsvector/GIN index is maintained via triggers.
-     */
-    log.debug('Maintenance batch 1 step "fts-maintenance" archive skipped — PostgreSQL tsvector/GIN is sync-on-write');
-    return;
-  }
 
   /** Run a best-effort passive WAL checkpoint without forcing live writers to truncate. */
   private checkpointWal(): void {

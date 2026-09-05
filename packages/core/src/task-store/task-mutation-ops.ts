@@ -20,7 +20,6 @@ import type {LegacyAutoMergeStampReconcileResult} from "../store.js";
 import {randomUUID} from "node:crypto";
 import {mkdir, readFile, writeFile, rename, unlink} from "node:fs/promises";
 import {join} from "node:path";
-import {existsSync} from "node:fs";
 import { getTaskActivityLogEntryLimit } from "./comments.js";
 import type { TaskLogEntry } from "../types.js";
 import type {Task, TaskCreateInput, TaskAttachment, BoardConfig, ActivityLogEntry, ActivityEventType, Artifact, ArtifactCreateInput, RunMutationContext, MergeQueueEntry, BranchGroup, BranchGroupUpdate, CompletionHandoffMarker, WorkflowWorkItem, WorkflowWorkItemKind, PrEntity, PrEntityUpdate, TaskRecommendation, WorkspaceWorktreeEntry, TaskRepositoryScope} from "../types.js";
@@ -34,11 +33,6 @@ import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
 import {assertSafeGitBranchName} from "../task-store/shell-safety.js";
 import {isFusionDeletableBranch} from "../branch/branch-assignment.js";
 import {readTaskRow as readTaskRowAsync, readTaskRowInTransaction, resolveActiveTaskWedgeEpisodeRow} from "../task-store/async/async-persistence.js";
-import {findArchivedTaskEntry, upsertArchivedTaskEntry} from "./async/async-archive-lineage.js";
-import { appendPatchnodeEntry } from "./async/async-patchnode.js";
-import { buildPatchnodeEntryInput } from "../board/patchnode.js";
-import { resolveProjectColumnsForRoles } from "../project-lane-vocabulary.js";
-import {purgeTaskWorkflowSelectionRowsAsyncImpl} from "./workflow-definitions.js";
 import * as schema from "../postgres/schema/index.js";
 import {and, asc, eq, inArray, isNotNull, isNull, sql} from "drizzle-orm";
 import {recoverExpiredMergeQueueLeases as recoverExpiredMergeQueueLeasesAsync} from "../task-store/async/async-merge-coordination.js";
@@ -54,7 +48,7 @@ import {publishSettingsUpdated} from "./settings-ops.js";
 import {loadWorkspaceConfig} from "../git/git-repository.js";
 import { mergeRestoredProjectSettings } from "../config/settings-schema.js";
 import type {ConfigChangedBy, ConfigurationRevision} from "../types.js";
-import { resolveArchivedLanes } from "../project-lane-vocabulary.js";
+import { ARCHIVED_SENTINEL_LANES } from "../project-lane-vocabulary.js";
 import { acquireTaskAdvisoryXactLock } from "./task-advisory-lock.js";
 import { invalidateSupersededRepositoryScopeReviews } from "../tasks/repository-scope.js";
 
@@ -200,7 +194,7 @@ export async function writeConfigImpl(store: TaskStore, config: BoardConfig, opt
     }
   }
 
-export async function _maybeAutoArchiveSameAgentDuplicateBackendImpl(store: TaskStore, task: Task, input: TaskCreateInput,): Promise<void> {
+export async function _resolveSameAgentDuplicateIntakeBackendImpl(store: TaskStore, task: Task, input: TaskCreateInput,): Promise<void> {
   // Keep the production backend as wiring only: policy lives in the shared resolver.
   return resolveSameAgentDuplicateIntake(store, task, input);
 }
@@ -268,8 +262,8 @@ export async function listTasksForGithubTrackingReconcileImpl(store: TaskStore, 
  * FNXC:GitLabTracking 2026-07-02-00:00:
  * GitLab-tracking reconcile, cloned from listTasksForGithubTrackingReconcileImpl
  * with githubTracking → gitlabTracking. Returns soft-deleted tasks carrying
- * gitlab_tracking JSONB, paginated by updatedAt ASC. Archived tasks are skipped
- * in backend mode (AsyncArchiveLineage is a separate async subsystem).
+ * gitlab_tracking JSONB, paginated by updatedAt ASC. Cold historical snapshots are
+ * outside this deletion-reconciliation scan.
  */
 export async function listTasksForGitlabTrackingReconcileImpl(store: TaskStore, options?: { offset?: number; limit?: number }): Promise<{ tasks: Task[]; hasMore: boolean }> {
     const reconcileScanLimit = 200;
@@ -727,7 +721,7 @@ export async function mergeWorkspaceWorktreeEntryImpl(
       FNXC:WorkspaceWorktree 2026-08-20-07:08: Persist the prepared entry only after the authoritative
       task row passes lifecycle revalidation under the database advisory lock. A cross-process move
       that wins during filesystem preparation therefore blocks the row update instead of attaching a
-      late worktree to review, complete, or archived state.
+      late worktree to review, Complete, or a deleted/historical sentinel row.
       */
       const updatedAt = new Date().toISOString();
       const [updatedRow] = await tx
@@ -1548,7 +1542,7 @@ export async function registerArtifactImpl(store: TaskStore, input: ArtifactCrea
         FNXC:SqliteDualPathCleanup 2026-07-26-14:07:
         Artifact row insert is PostgreSQL-only via insertArtifactRowAsync.
         */
-        return insertArtifactRowAsync(store.asyncLayer!, input, stored, await resolveArchivedLanes(store));
+        return insertArtifactRowAsync(store.asyncLayer!, input, stored, ARCHIVED_SENTINEL_LANES);
       } catch (error) {
         if (stored.absolutePath) {
           await unlink(stored.absolutePath).catch(() => undefined);
@@ -1632,98 +1626,6 @@ export async function unlinkGithubIssueImpl(store: TaskStore, id: string): Promi
       return task;
     });
   }
-
-export async function cleanupArchivedTasksImpl(store: TaskStore): Promise<string[]> {
-    /*
-    FNXC:PostgresOnlyDataAccess 2026-07-17-15:10:
-    Backend-mode port. `cleanupArchivedTasks` is the hard-removal path for tasks
-    already in the `archived` column (the CLI documents it as such): it snapshots
-    each to cold storage, hard-deletes the live project row, and removes the task
-    directory. In PostgreSQL, archived rows are soft-deleted (`deleted_at` set), so
-    enumeration MUST pass `includeDeleted`. The cold snapshot upsert is idempotent
-    (archive already holds it from archive time); the project-row DELETE fires the
-    ON DELETE CASCADE that purges the task's documents/artifacts, matching the
-    SQLite path's dir removal. Selection rows are purged via the async helper.
-    */
-        const layer = store.asyncLayer!;
-    /*
-    FNXC:PostgresOnlyDataAccess 2026-07-17-17:40:
-    Enumerate the archived rows with an EXPLICIT project predicate. `listTasks()`
-    derives its scope from `taskProjectScope(layer)`, which is a NO-OP when the
-    layer is unbound (projectId absent) — i.e. it would read archived rows across
-    every project, and this destructive sweep (snapshot + dir removal + cache
-    evict) would then touch tasks it must never own. Scoping the read here to the
-    same `projectId` the DELETE below uses keeps enumerate+delete lockstep: a bound
-    store sees only its project, an unbound store only the `__legacy_unscoped__`
-    quarantine partition.
-    */
-    const projectId = layer.projectId?.trim() || "__legacy_unscoped__";
-    /*
-    FNXC:WorkflowResolvedColumns 2026-07-31-23:59 DELIBERATE-LITERAL — STATE MARKER, DO NOT RESOLVE:
-    `"archived"` here is the marker `archiveTask` WROTE, not a board lane. This sweep enumerates rows
-    Fusion itself archived and then REMOVES THEIR DIRECTORIES (`rm` below). Widening it to the
-    resolved archived-lane set would feed cards merely RESTING in a board's archived-trait lane into
-    a filesystem delete — live work, destroyed.
-
-    Marked at the site because the classification previously lived only in
-    `archived-column-gate-parity.test.ts`, and a coordinated three-encoding conversion edits THIS
-    file. A converter working file-by-file would see the same `eq(column, "archived")` shape as the
-    six LANE sites and have nothing here telling them apart.
-
-    The sibling STATE site is `async-self-healing.ts`'s soft-deleted column-drift query; the LANE/
-    STATE split for all eight Drizzle sites is recorded in that parity test.
-    */
-    const archivedRows = await layer.db
-      .select()
-      .from(schema.project.tasks)
-      .where(and(eq(schema.project.tasks.projectId, projectId), eq(schema.project.tasks.column, "archived")));
-    const cleanedUpIds: string[] = [];
-    const { rm } = await import("node:fs/promises");
-    const patchnodeCompleteColumns = await resolveProjectColumnsForRoles(store, ["complete"])
-      .catch(() => new Set<string>());
-
-    for (const row of archivedRows) {
-      const task = store.rowToTask(store.pgRowToTaskRow(row));
-      const dir = store.taskDir(task.id);
-      /*
-      FNXC:PatchnodeLedger 2026-08-28-12:16:
-      A pre-Patchnode archived row reaches its last surviving summary here. Consult the existing cold snapshot before rewriting it, and leave the row intact when capture fails so a later cleanup can retry instead of hard-deleting the only evidence.
-      */
-      const existingEntry = await findArchivedTaskEntry(layer.db, task.id, layer.projectId);
-      if (
-        patchnodeCompleteColumns.has(existingEntry?.preArchiveColumn ?? "")
-        && task.columnMovedAt
-        && Number.isFinite(Date.parse(task.columnMovedAt))
-      ) {
-        try {
-          await appendPatchnodeEntry(layer, buildPatchnodeEntryInput(task, "completed", task.columnMovedAt));
-        } catch (error) {
-          storeLog.warn(`[patchnode] skipping archived cleanup after capture failure for ${task.id}`, {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          continue;
-        }
-      }
-      // Guarantee a cold-storage snapshot before the destructive delete.
-      const entry = await store.taskToArchiveEntry(task, task.deletedAt ?? new Date().toISOString());
-      await upsertArchivedTaskEntry(layer.db, entry, layer.projectId);
-
-      await purgeTaskWorkflowSelectionRowsAsyncImpl(store, task.id);
-      await layer.db
-        .delete(schema.project.tasks)
-        .where(and(eq(schema.project.tasks.projectId, projectId), eq(schema.project.tasks.id, task.id)));
-
-      if (existsSync(dir)) {
-        await rm(dir, { recursive: true, force: true });
-      }
-      if (store.isWatching) {
-        store.taskCache.delete(task.id);
-      }
-      cleanedUpIds.push(task.id);
-    }
-
-    return cleanedUpIds;
-}
 
 export function generatePromptFromArchiveEntryImpl(store: TaskStore, entry: import("../types.js").ArchivedTaskEntry): string {
     const deps =
@@ -1838,10 +1740,6 @@ export async function closeImpl(store: TaskStore): Promise<void> {
       store._db.close();
       store._db = null;
       store.taskIdStateReconciled = false;
-    }
-    if (store._archiveDb) {
-      store._archiveDb.close();
-      store._archiveDb = null;
     }
     if (store.secretsCentralCore) {
       /**

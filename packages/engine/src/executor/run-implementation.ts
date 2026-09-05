@@ -691,7 +691,7 @@ export async function runImplementation(
       is the answer main settled on in `branch-group-ops.ts` (#2720) and it is reused here rather than
       re-derived.
 
-      MEMBERSHIP and unioned with the legacy trio, because a workflow may declare more than one complete or
+      MEMBERSHIP and unioned with the legacy review/completion pair, because a workflow may declare more than one Complete or
       review lane and `resolveWorkflowIrForTask` yields the BUILT-IN IR for a missing workflow rather than
       throwing — without the union a degraded renamed board treats a finished blocker as unmet and the
       dependent never runs.
@@ -704,15 +704,15 @@ export async function runImplementation(
       const satisfiedByDep = new Map<string, ReadonlySet<string>>();
       for (const depId of task.dependencies) {
         if (satisfiedByDep.has(depId)) continue;
-        const satisfied = new Set<string>(["done", "in-review", "archived"]);
+        const satisfied = new Set<string>(["done", "in-review"]);
         try {
           const depIr = await resolveWorkflowIrForTask(deps.store, depId, depIrCache);
           if (depIr) {
-            for (const flag of ["complete", "archived", "mergeOrchestration", "mergeBlocker", "humanReview"] as const) {
+            for (const flag of ["complete", "mergeOrchestration", "mergeBlocker", "humanReview"] as const) {
               for (const id of columnsWithFlag(depIr, flag)) satisfied.add(id);
             }
           }
-        } catch { /* degraded: the legacy trio */ }
+        } catch { /* degraded: the legacy pair */ }
         satisfiedByDep.set(depId, satisfied);
       }
       const unmetDeps = task.dependencies.filter((depId) => {

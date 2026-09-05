@@ -363,10 +363,7 @@ export class MissionExecutionLoop extends EventEmitter {
                     const linkedLifecycle = linkedTask
                       ? await resolveTaskLifecycleColumns(this.taskStore, linkedTask.id)
                       : undefined;
-                    if (linkedTask && (
-                      linkedTask.column === (linkedLifecycle?.complete ?? "done")
-                      || linkedTask.column === (linkedLifecycle?.archived ?? "archived")
-                    )) {
+                    if (linkedTask && linkedTask.column === (linkedLifecycle?.complete ?? "done")) {
                       await this.processTaskOutcome(feature.taskId);
                     }
                   }
@@ -403,10 +400,7 @@ export class MissionExecutionLoop extends EventEmitter {
                     const linkedLifecycle = linkedTask
                       ? await resolveTaskLifecycleColumns(this.taskStore, linkedTask.id)
                       : undefined;
-                    if (linkedTask && (
-                      linkedTask.column === (linkedLifecycle?.complete ?? "done")
-                      || linkedTask.column === (linkedLifecycle?.archived ?? "archived")
-                    )) {
+                    if (linkedTask && linkedTask.column === (linkedLifecycle?.complete ?? "done")) {
                       await this.processTaskOutcome(feature.taskId);
                     }
                     recoveredCount++;
@@ -435,10 +429,7 @@ export class MissionExecutionLoop extends EventEmitter {
                   const linkedLifecycle = linkedTask
                       ? await resolveTaskLifecycleColumns(this.taskStore, linkedTask.id)
                       : undefined;
-                    if (linkedTask && (
-                      linkedTask.column === (linkedLifecycle?.complete ?? "done")
-                      || linkedTask.column === (linkedLifecycle?.archived ?? "archived")
-                    )) {
+                    if (linkedTask && linkedTask.column === (linkedLifecycle?.complete ?? "done")) {
                     loopLog.log(`Recovery: re-triggering implementing feature ${feature.id} from completed task ${feature.taskId}`);
                     await this.processTaskOutcome(feature.taskId);
                     recoveredCount++;
@@ -744,7 +735,7 @@ export class MissionExecutionLoop extends EventEmitter {
         await this.runMilestoneValidationIfReady(feature);
       } else if (result.status === "fail") {
         // A "fail" verdict is only trustworthy once the linked task's code has
-        // actually landed (done/archived). If the task is still mid-pipeline
+        // actually landed in its workflow Complete column. If the task is still mid-pipeline
         // (in-review PR, external merge train, deferred base sync), the
         // validator judged a checkout that predates the merge — route to the
         // inconclusive outcome (R21, no Fix Feature) and let a later validation
@@ -791,7 +782,7 @@ export class MissionExecutionLoop extends EventEmitter {
 
   /**
    * Resolve the linked task's column when it affirmatively shows the task has
-   * NOT completed yet (any column other than "done"/"archived"). Returns null
+   * NOT completed yet (any column outside the Complete role). Returns null
    * when the task is completed, missing, unlinked, or unreadable — i.e. every
    * case where a fail verdict should be trusted. Fails open on purpose: the
    * guard may only ever defer a fail, never suppress one on missing data.
@@ -804,7 +795,6 @@ export class MissionExecutionLoop extends EventEmitter {
     if (
       !column
       || column === (premergeLifecycle?.complete ?? "done")
-      || column === (premergeLifecycle?.archived ?? "archived")
     ) return null;
     return column;
   }
@@ -2016,26 +2006,23 @@ ${taskContext ? `\n\nImplementation context:\n${taskContext}` : ""}`;
         // makes duplicate triage safe to suppress; otherwise persist an action.
         /*
         FNXC:WorkflowResolvedColumns 2026-07-30-11:55 (batch-engine tail):
-        "Open" is the COMPLETE and ARCHIVED roles, not the two ids. The note above states the rule this
-        line implements — only an OPEN task makes duplicate triage safe to suppress — and on a renamed
+        An open task is any live row outside the Complete role. The note above states the rule this line implements — only an open task makes duplicate triage safe to suppress — and on a renamed
         board the rule inverts: a FINISHED fix task reads as live, so remediation for a fresh validation
         failure is suppressed indefinitely and the mission stalls with no error surfaced.
 
         Resolved from the FIX TASK's own workflow (it need not share the feature's), unioned with the
-        legacy pair because `resolveWorkflowIrForTask` returns the BUILT-IN IR for a missing or corrupt
+        legacy Done fallback because `resolveWorkflowIrForTask` returns the built-in IR for a missing or corrupt
         workflow rather than throwing — without the union a degraded board resolves a terminal set that
         excludes its own terminal lanes and every fix task reads as live, which is the bug being fixed.
         */
-        const fixTaskTerminalColumns = new Set<string>(["done", "archived"]);
+        const fixTaskTerminalColumns = new Set<string>(["done"]);
         if (linkedFixTask) {
           try {
             const fixIr = await resolveWorkflowIrForTask(this.taskStore, linkedFixTask.id);
             if (fixIr) {
-              for (const flag of ["complete", "archived"] as const) {
-                for (const id of columnsWithFlag(fixIr, flag)) fixTaskTerminalColumns.add(id);
-              }
+              for (const id of columnsWithFlag(fixIr, "complete")) fixTaskTerminalColumns.add(id);
             }
-          } catch { /* degraded: legacy pair only */ }
+          } catch { /* degraded: Done only */ }
         }
         const hasLiveFixTask = Boolean(linkedFixTask && !linkedFixTask.deletedAt && !fixTaskTerminalColumns.has(linkedFixTask.column) && linkedFixTask.status !== "failed");
         if (hasLiveFixTask) {

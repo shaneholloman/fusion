@@ -26,7 +26,6 @@ const boardWorkflows: BoardWorkflowsPayload = {
           flags: { countsTowardWip: true, mergeBlocker: true },
         },
         { id: "done", name: "Done", flags: { complete: true } },
-        { id: "archived", name: "Archived", flags: { archived: true } },
       ],
     },
     {
@@ -40,7 +39,6 @@ const boardWorkflows: BoardWorkflowsPayload = {
           flags: { countsTowardWip: true },
         },
         { id: "design-done", name: "Done", flags: { complete: true } },
-        { id: "design-archived", name: "Archived", flags: { archived: true } },
       ],
     },
     {
@@ -140,7 +138,6 @@ describe("computeWorkflowStatusCounts", () => {
       [
         task("FN-complete-in-progress", "in-progress"),
         task("FN-wip-done", "done"),
-        task("FN-archived-active", "active"),
       ],
       singleWorkflowPayload("flags-win", [
         {
@@ -152,11 +149,6 @@ describe("computeWorkflowStatusCounts", () => {
           id: "done",
           name: "WIP despite id",
           flags: { countsTowardWip: true },
-        },
-        {
-          id: "active",
-          name: "Archived despite id",
-          flags: { archived: true },
         },
       ])
     );
@@ -194,7 +186,6 @@ describe("computeWorkflowStatusCounts", () => {
         task("FN-missing-assignment", "ready"),
         task("FN-stale-assignment", "done"),
         task("FN-hidden", "quiet"),
-        task("FN-archived", "archived"),
         task("FN-unknown-column", "missing"),
         task("FN-design-todo", "design-todo"),
         taskWithStatus("FN-design-active", "design-active", "merging"),
@@ -218,7 +209,6 @@ describe("computeWorkflowStatusCounts", () => {
         taskWorkflowIds: {
           "FN-stale-assignment": "deleted-workflow",
           "FN-hidden": "default",
-          "FN-archived": "default",
           "FN-unknown-column": "design",
           "FN-design-todo": "design",
           "FN-design-active": "design",
@@ -268,10 +258,9 @@ describe("computeWorkflowStatusCounts", () => {
     expect(counts.get(ALL_WORKFLOWS_BOARD_VIEW_ID)).toEqual({ todo: 0, inProgress: 2, done: 0, merging: 2 });
   });
 
-  it("excludes archived and board-hidden column tasks while stale workflows fall back to default", () => {
+  it("excludes board-hidden column tasks while stale workflows fall back to default", () => {
     const counts = computeWorkflowStatusCounts(
       [
-        task("FN-archived", "archived"),
         task("FN-hidden", "quiet"),
         task("FN-unknown-column", "missing"),
         task("FN-unknown-workflow", "todo"),
@@ -329,7 +318,6 @@ describe("computeWorkflowStatusCounts", () => {
           task(`${workflowId}-in-progress`, "in-progress"),
           task(`${workflowId}-in-review`, "in-review"),
           task(`${workflowId}-done`, "done"),
-          task(`${workflowId}-archived`, "archived"),
         ],
         singleWorkflowPayload(workflowId, columns)
       );

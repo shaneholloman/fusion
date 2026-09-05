@@ -114,10 +114,6 @@ const mockUseTasks = vi.fn(() => ({
   resetTask: vi.fn(),
   updateTask: vi.fn(),
   duplicateTask: vi.fn(),
-  archiveTask: vi.fn(),
-  unarchiveTask: vi.fn(),
-  archiveAllDone: vi.fn(),
-  loadArchivedTasks: vi.fn(),
   refreshTasks: vi.fn(),
   ingestCreatedTasks: vi.fn(),
   lastFetchTimeMs: Date.now(),
@@ -714,6 +710,12 @@ async function waitForAppShell(): Promise<void> {
   });
 }
 
+function expectBoardToBeInactive(): void {
+  const board = document.querySelector(".board");
+  expect(board).toBeTruthy();
+  expect(board?.closest('[aria-hidden="true"]')).toBeTruthy();
+}
+
 describe("FN-8698 retained Board and List task popups", () => {
   it.each([
     ["desktop", "board", "list"],
@@ -760,10 +762,6 @@ describe("FN-8698 retained Board and List task popups", () => {
       resetTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
-      loadArchivedTasks: vi.fn(),
       refreshTasks: vi.fn(),
       ingestCreatedTasks: vi.fn(),
       lastFetchTimeMs: Date.now(),
@@ -906,10 +904,6 @@ beforeEach(() => {
     resetTask: vi.fn(),
     updateTask: vi.fn(),
     duplicateTask: vi.fn(),
-    archiveTask: vi.fn(),
-    unarchiveTask: vi.fn(),
-    archiveAllDone: vi.fn(),
-    loadArchivedTasks: vi.fn(),
     refreshTasks: vi.fn(),
     ingestCreatedTasks: vi.fn(),
     lastFetchTimeMs: Date.now(),
@@ -1120,10 +1114,6 @@ describe("FN-4250 FileBrowserProvider coverage", () => {
       resetTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
-      loadArchivedTasks: vi.fn(),
       refreshTasks: vi.fn(),
       ingestCreatedTasks: vi.fn(),
       lastFetchTimeMs: Date.now(),
@@ -1157,10 +1147,6 @@ describe("FN-4250 FileBrowserProvider coverage", () => {
       resetTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
-      loadArchivedTasks: vi.fn(),
       refreshTasks: vi.fn(),
       ingestCreatedTasks: vi.fn(),
       lastFetchTimeMs: Date.now(),
@@ -1386,12 +1372,8 @@ describe("App approval notification banner", () => {
       retryTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
       pauseTask: vi.fn(),
       resetTask: vi.fn(),
-      loadArchivedTasks: vi.fn(),
       ingestCreatedTasks: vi.fn(),
       refreshTasks: vi.fn(),
       lastFetchTimeMs: Date.now(),
@@ -1429,12 +1411,8 @@ describe("App approval notification banner", () => {
       retryTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
       pauseTask: vi.fn(),
       resetTask: vi.fn(),
-      loadArchivedTasks: vi.fn(),
       ingestCreatedTasks: vi.fn(),
       refreshTasks: vi.fn(),
       lastFetchTimeMs: Date.now(),
@@ -1497,12 +1475,8 @@ describe("App approval notification banner", () => {
       retryTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
       pauseTask: vi.fn(),
       resetTask: vi.fn(),
-      loadArchivedTasks: vi.fn(),
       ingestCreatedTasks: vi.fn(),
       refreshTasks: vi.fn(),
       lastFetchTimeMs: Date.now(),
@@ -2054,10 +2028,6 @@ describe("App deep link handling", () => {
       resetTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
-      loadArchivedTasks: vi.fn(),
       refreshTasks: vi.fn(),
       ingestCreatedTasks: vi.fn(),
       lastFetchTimeMs: Date.now(),
@@ -2100,10 +2070,6 @@ describe("App deep link handling", () => {
       resetTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
-      loadArchivedTasks: vi.fn(),
       refreshTasks: vi.fn(),
       ingestCreatedTasks: vi.fn(),
       lastFetchTimeMs: Date.now(),
@@ -2125,7 +2091,7 @@ describe("App deep link handling", () => {
     await waitFor(() => {
       expect(screen.queryByText("Nested task")).toBeNull();
       expect(screen.getByTestId("main-panel-task-detail")).toBeTruthy();
-      expect(screen.getByText("Back nav task")).toBeTruthy();
+      expect(screen.getAllByText("Back nav task").length).toBeGreaterThan(0);
     });
   });
 
@@ -2669,7 +2635,7 @@ describe("App view switching", () => {
       expect(screen.queryByTestId("list-view-body")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByText("+ New Task"));
+    fireEvent.click(document.querySelector(".list-new-task-action") as HTMLElement);
 
     // The NewTaskModal should be visible with its header and description field.
     // Scope the title to the modal heading; the left sidebar also renders a "New Task" nav label.
@@ -2934,8 +2900,8 @@ describe("App view switching", () => {
       expect(document.querySelector(".agents-view")).toBeTruthy();
     }, { timeout: 5000 });
 
-    // Should NOT show board or list view
-    expect(document.querySelector(".board")).toBeNull();
+    // Keep-alive views stay mounted after first visit, but only the selected view is exposed.
+    expectBoardToBeInactive();
     expect(screen.queryByTestId("list-view-body")).toBeNull();
   });
 
@@ -3001,8 +2967,8 @@ describe("App view switching", () => {
     // Insights view should be rendered (it has a insights-view container)
     expect(await screen.findByTestId("insights-view")).toBeTruthy();
 
-    // Should NOT show board, list, or agents view
-    expect(document.querySelector(".board")).toBeNull();
+    // Board stays mounted behind its inaccessible keep-alive wrapper.
+    expectBoardToBeInactive();
     expect(screen.queryByTestId("list-view-body")).toBeNull();
     expect(document.querySelector(".agents-view")).toBeNull();
   });
@@ -3160,7 +3126,7 @@ describe("App view switching", () => {
 
     expect(screen.queryByTitle("Board view")).toBeNull();
     expect(document.querySelector(".insights-view")).toBeNull();
-    expect(document.querySelector(".board")).toBeNull();
+    expectBoardToBeInactive();
 
     resolveSettings?.({
       ...defaultSettings,
@@ -3171,7 +3137,7 @@ describe("App view switching", () => {
       expect(document.querySelector(".insights-view")).toBeTruthy();
     });
 
-    expect(document.querySelector(".board")).toBeNull();
+    expectBoardToBeInactive();
     localStorage.removeItem(taskViewStorageKey());
   });
 
@@ -3207,7 +3173,7 @@ describe("App view switching", () => {
       expect(document.querySelector(".memory-view")).toBeTruthy();
     });
 
-    expect(document.querySelector(".board")).toBeNull();
+    expectBoardToBeInactive();
     localStorage.removeItem(taskViewStorageKey());
   });
 
@@ -3245,7 +3211,7 @@ describe("App view switching", () => {
     });
 
     expect(screen.getByTestId("sidebar-nav-goals")).toBeTruthy();
-    expect(document.querySelector(".board")).toBeNull();
+    expectBoardToBeInactive();
     localStorage.removeItem(taskViewStorageKey());
   });
 
@@ -4574,9 +4540,6 @@ describe("App board branch filters", () => {
       retryTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
       refreshTasks: vi.fn(),
     }));
 
@@ -4606,9 +4569,6 @@ describe("App board branch filters", () => {
       retryTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
       refreshTasks: vi.fn(),
     }));
 
@@ -4637,9 +4597,6 @@ describe("App board branch filters", () => {
       retryTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
       refreshTasks: vi.fn(),
     }));
 
@@ -4703,9 +4660,6 @@ describe("App board branch filters", () => {
       retryTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
       refreshTasks: vi.fn(),
     }));
 
@@ -4745,9 +4699,6 @@ describe("App board branch filters", () => {
       retryTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
       refreshTasks: vi.fn(),
     }));
 
@@ -4803,9 +4754,6 @@ describe("App board branch filters", () => {
       retryTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
       refreshTasks: vi.fn(),
     }));
 
@@ -4823,8 +4771,10 @@ describe("App board branch filters", () => {
 
     fireEvent.click(screen.getByTestId("sidebar-nav-list"));
     await waitFor(() => {
-      expect(screen.getByText("Alpha Search")).toBeTruthy();
-      expect(screen.getByText("Beta Search")).toBeTruthy();
+      const activeList = screen.getByTestId("list-keep-alive");
+      expect(activeList).not.toHaveAttribute("aria-hidden");
+      expect(within(activeList).getByText("Alpha Search")).toBeTruthy();
+      expect(within(activeList).getByText("Beta Search")).toBeTruthy();
     });
   });
 });
@@ -4863,10 +4813,6 @@ describe("FN-5817 mobile auto-merge toggle stability", () => {
       resetTask: vi.fn(),
       updateTask: vi.fn(),
       duplicateTask: vi.fn(),
-      archiveTask: vi.fn(),
-      unarchiveTask: vi.fn(),
-      archiveAllDone: vi.fn(),
-      loadArchivedTasks: vi.fn(),
       refreshTasks: vi.fn(),
       ingestCreatedTasks: vi.fn(),
       lastFetchTimeMs: Date.now(),

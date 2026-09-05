@@ -454,13 +454,13 @@ yet, so grep `DELIBERATE-LITERAL` to enumerate the sites it must admit.
 */
 /** Legacy completion signal: dependency's column is a terminal/handoff column. */
 function legacyDependencySatisfied(dep: Task): boolean {
-  return dep.column === "done" || dep.column === "in-review" || dep.column === "archived";
+  return dep.column === "done" || dep.column === "in-review";
 }
 
 /**
  * KTD-5 dependency satisfaction: the dependency task's current column has the
  * `complete` trait flag in ITS resolved workflow. Dual-accept (FN-5719): the
- * legacy completion signal (done/in-review/archived column, or an accepted
+ * legacy completion signal (done/in-review column, or an accepted
  * completion-handoff marker) is also honored; when the two disagree an
  * audit-diff event is logged.
  */

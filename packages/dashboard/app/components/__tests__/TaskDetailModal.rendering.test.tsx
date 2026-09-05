@@ -729,7 +729,7 @@ describe("TaskDetailModal", () => {
      * "Created to undo <id>" link. Reverse: a source task shows an "Undo task: <id>"
      * link only when an OPEN undo task referencing it exists in the loaded `tasks`
      * list — mirroring `TaskStore.findOpenRevertTaskForSource`'s open-only semantics
-     * (done/archived/soft-deleted undo tasks must not surface as an active link).
+     * (done or soft-deleted undo tasks must not surface as an active link).
      */
     describe("undo/revert provenance", () => {
       it("renders a clickable 'Created to undo <id>' link for an AI-undo task", async () => {
@@ -815,16 +815,15 @@ describe("TaskDetailModal", () => {
         });
       });
 
-      it("renders no reverse link when the only undo task for this source is done/archived (open-only invariant)", () => {
+      it("renders no reverse link when the only undo task for this source is done (open-only invariant)", () => {
         const sourceTask = makeTask({ id: "FN-100", column: "done" });
         const doneUndoTask = makeTask({ id: "FN-202", column: "done", sourceType: "recovery", sourceMetadata: { revertOf: "FN-100" } });
-        const archivedUndoTask = makeTask({ id: "FN-203", column: "archived", sourceType: "recovery", sourceMetadata: { revertOf: "FN-100" } });
 
         render(
           <TaskDetailModal
             initialTab="definition"
             task={sourceTask}
-            tasks={[sourceTask, doneUndoTask, archivedUndoTask]}
+            tasks={[sourceTask, doneUndoTask]}
             onClose={noop}
 
             onDeleteTask={noopDelete}
@@ -2356,7 +2355,7 @@ describe("TaskDetailModal", () => {
       expectNoStandaloneTitleToggle();
     });
 
-    it.each(["todo", "in-progress", "in-review", "done", "archived"] as const)(
+    it.each(["todo", "in-progress", "in-review", "done"] as const)(
       "collapses overflowing non-triage %s titles with a title-owned control",
       async (column) => {
         const longTitle = `${column} title `.repeat(25);
@@ -3073,33 +3072,13 @@ describe("TaskDetailModal", () => {
     );
 
     expect(screen.getByText("Potential duplicate detected")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Mark the duplicate flag for FN-1234 as read" }));
+    await userEvent.click(screen.getByRole("button", { name: "Keep" }));
 
     await waitFor(() => {
       expect(mockUpdateTask).toHaveBeenCalledWith("FN-099", { dismissNearDuplicate: true }, undefined);
     });
   });
 
-  it("omits an empty near-duplicate actions row without archive support", () => {
-    const { container } = render(
-      <TaskDetailModal
-        initialTab="definition"
-        task={makeTask({ sourceMetadata: { nearDuplicateOf: "FN-1234" } })}
-        tasks={[makeTask({ id: "FN-1234" })]}
-        onClose={noop}
-
-        onDeleteTask={noopDelete}
-        onMergeTask={noopMerge}
-        onOpenDetail={noopOpenDetail}
-        addToast={noop}
-      />,
-    );
-
-    expect(screen.getByText("Potential duplicate detected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Mark the duplicate flag for FN-1234 as read" })).toBeInTheDocument();
-    expect(container.querySelector(".detail-near-duplicate-banner__actions")).toBeNull();
-    expect(screen.queryByRole("button", { name: /keep/i })).toBeNull();
-  });
 
   it("hides near-duplicate banner once dismissed", () => {
     render(
@@ -3120,7 +3099,6 @@ describe("TaskDetailModal", () => {
   });
 
   it.each([
-    ["archived", makeTask({ id: "FN-1234", column: "archived" })],
     ["done", makeTask({ id: "FN-1234", column: "done" })],
     ["missing", undefined],
   ])("hides near-duplicate decision banner when canonical is %s", (_label, canonical) => {
@@ -3139,13 +3117,13 @@ describe("TaskDetailModal", () => {
     );
 
     expect(screen.queryByText("Potential duplicate detected")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
     expect(screen.queryByRole("button", { name: /keep/i })).toBeNull();
     expect(screen.queryByRole("button", { name: "Mark the duplicate flag for FN-1234 as read" })).toBeNull();
   });
 
-  it("archives from near-duplicate banner when confirmed", async () => {
-    const onArchiveTask = vi.fn().mockResolvedValue(makeTask({ column: "archived" }));
+  it("deletes from the near-duplicate banner when confirmed", async () => {
+    const onDeleteTask = vi.fn().mockResolvedValue(makeTask());
     mockConfirm.mockResolvedValueOnce(true);
 
     render(
@@ -3155,18 +3133,17 @@ describe("TaskDetailModal", () => {
         tasks={[makeTask({ id: "FN-1234" })]}
         onClose={noop}
 
-        onDeleteTask={noopDelete}
+        onDeleteTask={onDeleteTask}
         onMergeTask={noopMerge}
         onOpenDetail={noopOpenDetail}
-        onArchiveTask={onArchiveTask}
         addToast={noop}
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     await waitFor(() => {
-      expect(onArchiveTask).toHaveBeenCalledWith("FN-099");
+      expect(onDeleteTask).toHaveBeenCalledWith("FN-099", { removeLineageReferences: true });
     });
   });
 
@@ -3188,7 +3165,7 @@ describe("TaskDetailModal", () => {
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent("This task stays paused until you clear this flag or delete it.");
+    expect(screen.getByRole("status")).toHaveTextContent("Keep it to clear this flag, or delete it if the work is already covered.");
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     await waitFor(() => {

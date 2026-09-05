@@ -430,7 +430,7 @@ export function registerMessagingScriptRoutes(ctx: ApiRoutesContext): void {
       release it; every create still carries the stable unique proposalClaimId.
       */
       const findCreatedTask = async (proposalIdempotencyKey: string) =>
-        (await scopedStore.listTasks({ includeArchived: true })).find((task) => task.proposalClaimId === proposalIdempotencyKey);
+        (await scopedStore.listTasks({ includeArchived: false })).find((task) => task.proposalClaimId === proposalIdempotencyKey);
 
       if (metadata.proposalStatus === "created" && metadata.createdTaskId) {
         const task = await scopedStore.getTask(metadata.createdTaskId).catch(() => null);

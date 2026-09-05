@@ -34,7 +34,7 @@ export type {
 
 export {
   fetchTasks,
-  fetchArchivedTasks,
+  fetchCompletedTasks,
   fetchTaskRecommendations,
   fetchTaskDetail,
   fetchTaskPrompt,
@@ -51,7 +51,6 @@ export {
 } from "./tasks/tasks.js";
 import type {
   DeleteTaskOptions,
-  ArchiveTaskOptions,
   TaskRecommendationsResponse,
   TaskRuntimeFallbackResponse,
   TaskPromptResponse,
@@ -70,7 +69,6 @@ import type {
 } from "./tasks/tasks.js";
 export type {
   DeleteTaskOptions,
-  ArchiveTaskOptions,
   TaskRecommendationsResponse,
   TaskRuntimeFallbackResponse,
   TaskPromptResponse,
@@ -114,10 +112,7 @@ export {
   stopOverseer,
   explainOverseer,
   fetchPlannerInterventionTimeline,
-  archiveTask,
-  unarchiveTask,
   revertTask,
-  archiveAllDone,
   approvePlan,
   rejectPlan,
 } from "./tasks/tasks-lifecycle.js";

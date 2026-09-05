@@ -41,10 +41,6 @@ describe("quick add Start workflow guards", () => {
       { id: "todo", flags: {} },
     ] })))).toBe(true);
     expect(workflowSupportsQuickAddStart(validateQuickAddStartWorkflow(workflow({ columns: [
-      { id: "archived", flags: { archived: true, manualIntake: true } },
-      { id: "waiting", flags: { manualIntake: true } },
-    ] })))).toBe(true);
-    expect(workflowSupportsQuickAddStart(validateQuickAddStartWorkflow(workflow({ columns: [
       { id: "hidden", flags: { hiddenFromBoard: true, manualIntake: true } },
       { id: "planning", flags: { intake: true, hold: true } },
     ] })))).toBe(false);
@@ -131,7 +127,6 @@ describe("quick add Start workflow guards", () => {
         { id: "in-progress", name: "In progress", flags: { countsTowardWip: true } },
         { id: "in-review", name: "In review", flags: { mergeBlocker: true, humanReview: true } },
         { id: "done", name: "Done", flags: { complete: true } },
-        { id: "archived", name: "Archived", flags: { archived: true, hiddenFromBoard: true } },
       ],
       ...overrides,
     }));

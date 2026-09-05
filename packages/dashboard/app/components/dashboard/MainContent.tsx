@@ -141,7 +141,6 @@ export function MainContent(props: MainContentProps) {
   globalPaused,
   updateTask,
   retryTask,
-    archiveTask,
   revertTask,
   deleteTask,
   searchQuery,
@@ -931,7 +930,7 @@ export function MainContent(props: MainContentProps) {
               onDuplicateTask={duplicateTask}
               /*
               FNXC:Navigation 2026-06-22-09:00:
-              The full-panel task-detail must dismiss back to the board when a destructive/terminal action (delete/merge/archive/retry/reset/duplicate) fires, mirroring the modal path. Without onRequestClose the panel kept showing a ghost of the just-acted-on task.
+              The full-panel task-detail must dismiss back to the board when a destructive/terminal action (delete/merge/retry/reset/duplicate) fires, mirroring the modal path. Without onRequestClose the panel kept showing a ghost of the just-acted-on task.
               */
               onRequestClose={closeTaskDetailMainPanel}
               onRefinementCreated={(task) => ingestCreatedTasks([task])}
@@ -982,7 +981,6 @@ export function MainContent(props: MainContentProps) {
         onReviseTask={(task) => modalManager.openNewTaskWithDescription(task.description)}
         onPauseTask={pauseTask}
         onUnpauseTask={unpauseTask}
-        onArchiveTask={archiveTask}
         onRevertTask={revertTask}
         onMergeTask={mergeTask}
             onResetTask={resetTask}

@@ -23,8 +23,9 @@ export function validateQuickAddStartWorkflow(value: unknown): ValidatedQuickAdd
   return workflow as ValidatedQuickAddWorkflow;
 }
 
+/* FNXC:TaskArchiveRemoval 2026-09-04-14:51: Workflow metadata has no Archived role; visibility is determined solely by the board-hidden contract. */
 function visibleColumns(workflow: ValidatedQuickAddWorkflow) {
-  return workflow.columns.filter((column) => !column.flags.archived && !column.flags.hiddenFromBoard);
+  return workflow.columns.filter((column) => !column.flags.hiddenFromBoard);
 }
 
 /*
@@ -49,7 +50,7 @@ export function workflowSupportsQuickAddStart(workflow: ValidatedQuickAddWorkflo
  * FNXC:QuickAddStart 2026-08-26-19:19:
  * The forward step is now the IMMEDIATELY following visible column, and a `hold` lane is a legal
  * destination rather than something to skip. Skipping holds produced a move the server always
- * refuses: column adjacency permits `intake -> hold | archived` only (ROLE_TRANSITIONS in
+ * refuses: column adjacency permits `intake -> hold` only (ROLE_TRANSITIONS in
  * packages/core/src/workflows/workflow-transitions.ts), and neighbour-derived adjacency for
  * genuinely custom shapes permits the next declared column only. Jumping over a Planning hold lane
  * into the WIP lane therefore returned 409 "Invalid transition: 'ideas' -> 'in-progress'", so Start

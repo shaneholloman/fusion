@@ -1187,7 +1187,7 @@ export interface Task {
   /** Number of bounded recovery retry attempts for transient executor/triage failures.
    *  Distinct from `mergeRetries` (merge-conflict-specific). Incremented by the
    *  recovery-policy module on each recoverable failure; cleared when work restarts
-   *  cleanly or reaches a terminal column (in-review, done, archived). */
+   *  cleanly, reaches review/Complete, or becomes a deleted/historical sentinel row. */
   recoveryRetryCount?: number;
   /** FNXC:WorkspaceContention 2026-08-23-06:40: Durable owner-local retry budget for holdForSessionContention; manual retry, clean completion, and exhausted waits reset it. */
   sessionContentionHoldCount?: number;

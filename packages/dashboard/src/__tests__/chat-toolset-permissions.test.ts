@@ -28,10 +28,8 @@ describe("createChatFusionToolset — permission-parity regression", () => {
   // Task-lifecycle mutation tools that require an enforceable action-gate context.
   // These are only exposed when actionGateContext is present, because
   // wrapToolsWithActionGate is a pass-through without a gate (pi.ts) — advertising
-  // them ungated would let archive/delete/retry/etc. run with no policy enforcement.
+  // them ungated would let delete/retry/etc. run with no policy enforcement.
   const gatedMutationTools = [
-    "fn_task_archive",
-    "fn_task_unarchive",
     "fn_task_delete",
     "fn_task_retry",
     "fn_task_pause",
@@ -60,6 +58,20 @@ describe("createChatFusionToolset — permission-parity regression", () => {
     for (const name of gatedMutationTools) {
       expect(names.has(name), `missing gated mutation tool: ${name}`).toBe(true);
     }
+  });
+
+  it("does not expose the removed task archive tools", async () => {
+    const tools = await createChatFusionToolset({
+      taskStore: baseTaskStore(),
+      agentStore: baseAgentStore,
+      rootDir: "/project",
+      agentId: "agent-abc",
+      missionMutationGated: true,
+      actionGateContext: {} as any,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("fn_task_archive")).toBe(false);
+    expect(names.has("fn_task_unarchive")).toBe(false);
   });
 
   it("withholds task-mutation tools when there is no enforceable action-gate context", async () => {

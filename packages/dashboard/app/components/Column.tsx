@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useFlashOnIncrease } from "../hooks/useFlashOnIncrease";
 import { useConfirm } from "../hooks/useConfirm";
 import { rebuildTaskSpec } from "../api";
-import { COLUMN_LABELS, COLUMN_DESCRIPTIONS, getErrorMessage, type TaskColumnSortMode, type DoneColumnSortMode, type Task, type TaskDetail, type Column as ColumnType, type ColumnId, type TaskCreateInput, type GithubIssueAction, type MergeResult } from "@fusion/core";
+import { COLUMN_LABELS, COLUMN_DESCRIPTIONS, type TaskColumnSortMode, type DoneColumnSortMode, type Task, type TaskDetail, type Column as ColumnType, type ColumnId, type TaskCreateInput, type GithubIssueAction, type MergeResult } from "@fusion/core";
 import { enrichRunningAgentTaskShapeFromFlags, isRunningAgentTask } from "../../../core/src/agents/live-agent-count";
 import { isNearDuplicateCanonicalInactive } from "../../../core/src/duplicates/near-duplicate-canonical";
 import { TaskCard } from "./TaskCard";
@@ -12,15 +12,13 @@ import { QuickEntryBox } from "./QuickEntryBox";
 import { PluginSlot } from "./PluginSlot";
 import { groupByWorktree } from "../utils/worktreeGrouping";
 import {
-  isArchivedColumnRole,
-  isCompleteColumnRole,
   isPreImplementationColumnRole,
   isReviewColumnRole,
   isWipColumnRole,
 } from "../utils/columnRoles";
 import type { ToastType } from "../hooks/useToast";
 import type { TaskContextMenuColumnMetadata } from "./TaskContextMenu";
-import { ChevronDown, ChevronUp, MoreVertical } from "lucide-react";
+import { MoreVertical } from "lucide-react";
 import type { BoardWorkflowDefinition, ModelInfo, BoardWorkflowColumnFlags, RevertTaskOptions, RevertTaskResult } from "../api";
 import type { BlockerFanoutEntry } from "../hooks/useBlockerFanout";
 
@@ -156,9 +154,6 @@ interface ColumnProps {
   ) => Promise<Task>;
   onRetryTask?: (id: string) => Promise<Task>;
   onOpenChatWithPrefill?: (prefillText: string) => void;
-  onArchiveTask?: (id: string, options?: { removeLineageReferences?: boolean }) => Promise<Task>;
-  onUnarchiveTask?: (id: string) => Promise<Task>;
-  /* FNXC:TaskRevert 2026-07-05-00:00 (FN-7525): threaded alongside onArchiveTask/onUnarchiveTask. */
   onRevertTask?: (id: string, body?: RevertTaskOptions) => Promise<RevertTaskResult>;
   /*
   FNXC:TaskRevert 2026-08-27-02:18:
@@ -171,7 +166,6 @@ interface ColumnProps {
     removeLineageReferences?: boolean;
     githubIssueAction?: GithubIssueAction;
   }) => Promise<Task>;
-  onArchiveAllDone?: () => Promise<Task[]>;
   /** Current display order for this Board lane. */
   sortMode?: TaskColumnSortMode;
   /** Updates this lane's Board-local display order. */
@@ -179,14 +173,11 @@ interface ColumnProps {
   /** Compatibility aliases retained for existing Done-column integrations. */
   doneSortMode?: DoneColumnSortMode;
   onDoneSortModeChange?: (mode: DoneColumnSortMode) => void;
-  collapsed?: boolean;
-  onToggleCollapse?: () => void;
-  /** FNXC:ArchivePagination 2026-07-08-00:00: FN-7659 — whether another archived page (beyond what's currently loaded) is available. Drives the archived column's server-backed "Show more" button. */
-  archivedHasMore?: boolean;
-  /** True while a "Show more" archived page fetch is in flight. */
-  archivedLoadingMore?: boolean;
-  /** Fetches the next 100-item page of archived tasks (newest-first). */
-  onLoadMoreArchived?: () => Promise<void>;
+  /** Exact server count for a paged lane; defaults to the loaded task count. */
+  totalTaskCount?: number;
+  serverHasMore?: boolean;
+  serverLoadingMore?: boolean;
+  onLoadMoreServer?: () => Promise<void>;
   allTasks?: Task[];
   availableModels?: ModelInfo[];
   /**
@@ -213,9 +204,7 @@ interface ColumnProps {
   /** Whether GitHub CLI auth is available for creating PRs from task cards. */
   prAuthAvailable?: boolean;
   // ── U9 workflow-columns (flag-ON) additive props ─────────────────────────
-  /** True when the board is in multi-lane workflow mode (flag ON). Switches
-   *  column behavior (label, bulk actions, archived detection) from legacy
-   *  literals to trait-flag predicates. Flag OFF leaves all behavior legacy. */
+  /** True when the board is in multi-lane workflow mode. Switches column behavior from legacy ids to trait flags. */
   /*
   FNXC:WorkflowResolvedColumns 2026-07-29-00:00 (U12 — R8 drift conversion):
   The ids of tasks whose own column is a hold lane in THEIR OWN workflow, for the worktree
@@ -243,7 +232,7 @@ interface ColumnProps {
   taskContextMenuColumnsByTaskId?: ReadonlyMap<string, readonly TaskContextMenuColumnMetadata[]>;
 }
 
-function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeGrouping, onMoveTask, onPauseTask, onUnpauseTask, onResetTask, onDuplicateTask, onMergeTask, onOpenDetail, onOpenRefine, onOpenGroupModal, addToast, onQuickCreate, onNewTask, autoMerge, mergeStrategy = "direct", onToggleAutoMerge, planAutoApproveEnabled, onTogglePlanAutoApprove, globalPaused, onUpdateTask, onRetryTask, onOpenChatWithPrefill, onArchiveTask, onUnarchiveTask, onRevertTask, onReviseTask, onDeleteTask, onArchiveAllDone, sortMode, onSortModeChange, doneSortMode, onDoneSortModeChange, collapsed, onToggleCollapse, archivedHasMore, archivedLoadingMore, onLoadMoreArchived, allTasks, availableModels, onPlanningMode, onOpenDetailWithTab, favoriteProviders, favoriteModels, onToggleFavorite, onToggleModelFavorite, isSearchActive, onOpenMission, lastFetchTimeMs, taskCardFieldDefs, taskWorkflowBadges, blockerFanoutMap, prAuthAvailable, holdTaskIds, workflowMode, workflowId, workflowOptions, defaultWorkflowId, columnDisplayName, columnDescription, columnFlags, workflowContextMenuColumns, taskContextMenuColumnsByTaskId }: ColumnProps) {
+function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeGrouping, onMoveTask, onPauseTask, onUnpauseTask, onResetTask, onDuplicateTask, onMergeTask, onOpenDetail, onOpenRefine, onOpenGroupModal, addToast, onQuickCreate, onNewTask, autoMerge, mergeStrategy = "direct", onToggleAutoMerge, planAutoApproveEnabled, onTogglePlanAutoApprove, globalPaused, onUpdateTask, onRetryTask, onOpenChatWithPrefill, onRevertTask, onReviseTask, onDeleteTask, sortMode, onSortModeChange, doneSortMode, onDoneSortModeChange, totalTaskCount, serverHasMore, serverLoadingMore, onLoadMoreServer, allTasks, availableModels, onPlanningMode, onOpenDetailWithTab, favoriteProviders, favoriteModels, onToggleFavorite, onToggleModelFavorite, isSearchActive, onOpenMission, lastFetchTimeMs, taskCardFieldDefs, taskWorkflowBadges, blockerFanoutMap, prAuthAvailable, holdTaskIds, workflowMode, workflowId, workflowOptions, defaultWorkflowId, columnDisplayName, columnDescription, columnFlags, workflowContextMenuColumns, taskContextMenuColumnsByTaskId }: ColumnProps) {
   const { t } = useTranslation("app");
   // Anchor the board.rejection.* catalog keys for the i18next extractor (it
   // scopes `t` to the useTranslation binding, so the shared translateRejection
@@ -268,7 +257,9 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
   */
   const resolvedColumnDescription = columnDescription?.trim() ? columnDescription : COLUMN_DESCRIPTIONS[column];
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const countFlashing = useFlashOnIncrease(tasks.length);
+  const isCompleteColumn = columnFlags?.complete === true || (!workflowMode && column === "done");
+  const displayedTaskCount = totalTaskCount ?? tasks.length;
+  const countFlashing = useFlashOnIncrease(displayedTaskCount);
   const { confirm } = useConfirm();
   const getTaskContextMenuColumns = useCallback((task: Task) => (
     taskContextMenuColumnsByTaskId?.get(task.id) ?? workflowContextMenuColumns
@@ -327,15 +318,13 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
   (`Boolean(boardWorkflows?.workflows.length)`) standing in for a PER-COLUMN question, so when the
   board is in workflow mode but THIS column has no resolved traits — a column the workflow no longer
   declares, which is exactly what a mid-flight workflow edit leaves behind — the old form answered
-  `false` for every role. Not "fall back to the id": no role at all, so the archive affordance, the
-  promote affordance and the bulk actions all silently vanished from that column.
+  `false` for every role. Not "fall back to the id": no role at all, so promote and bulk
+  affordances silently vanished from that column.
 
   The helpers ask per column and fall back to the legacy id only when the flags are genuinely absent,
   which also covers the pre-load window the old form handled via `workflowMode === false`. Deliberate
   behaviour change, documented rather than silent; covered by column-role-degraded-flags.test.ts.
   */
-  const isArchived = isArchivedColumnRole(columnFlags, column);
-  const isCollapsed = isArchived && collapsed;
   const isWipProcessingColumn = isWipColumnRole(columnFlags, column);
   /*
   FNXC:WorktreeGroupingSetting 2026-06-27-22:30:
@@ -372,21 +361,20 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
   ~4000-line TaskCards, and a resident set that large is a primary reason mobile browsers reclaim the
   backgrounded tab (the operator sees a white-splash reload on return). It is also unnecessary: the
   `tasks` handed to this column are ALREADY search-filtered upstream, so paginating them still shows
-  matches — just an increment at a time behind the same "Load more" button. The remaining bypasses are
-  bounded: the archived column is server-paginated (100 per page) and worktree grouping renders only
-  the WIP/processing lane.
+  matches — just an increment at a time behind the same "Load more" button. Worktree grouping remains
+  the only bypass because it renders the bounded WIP/processing lane.
   */
-  const shouldPaginate = !isArchived && !showWorktreeGroups && tasks.length > PAGINATED_COLUMN_THRESHOLD;
+  const shouldPaginate = !showWorktreeGroups && tasks.length > PAGINATED_COLUMN_THRESHOLD;
 
   useEffect(() => {
     setVisibleTaskCount((current) => {
-      if (showWorktreeGroups || isArchived || tasks.length <= PAGINATED_COLUMN_THRESHOLD) {
+      if (showWorktreeGroups || tasks.length <= PAGINATED_COLUMN_THRESHOLD) {
         return VISIBLE_TASKS_INITIAL;
       }
 
       return Math.min(Math.max(current, VISIBLE_TASKS_INITIAL), tasks.length);
     });
-  }, [showWorktreeGroups, isArchived, tasks.length]);
+  }, [showWorktreeGroups, tasks.length]);
 
   /*
   FNXC:BoardColumnWindowing 2026-07-26-14:20:
@@ -474,11 +462,10 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
   the honest fix is to migrate them to the shape Board actually uses rather than keep an arm alive
   to satisfy them. Done in Column.test.tsx alongside this.
 
-  Deliberately NOT solved by defaulting `workflowMode` to true: `isArchived`, `isHoldColumn` and
-  `isWipProcessingColumn` all switch on that same flag, so a global default would silently
-  reinterpret every other fixture in the file.
+  Deliberately NOT solved by defaulting `workflowMode` to true: role-dependent behavior shares that
+  flag, so a global default would silently reinterpret every other fixture in the file.
   */
-  const canCreateInColumn = Boolean(onQuickCreate && !isArchived && workflowMode);
+  const canCreateInColumn = Boolean(onQuickCreate && workflowMode);
 
   const handleQuickCreate = useCallback(
     (input: TaskCreateInput) => {
@@ -505,23 +492,16 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
     setVisibleTaskCount((current) => Math.min(current + VISIBLE_TASKS_INCREMENT, tasks.length));
   }, [tasks.length]);
 
-  /*
-  FNXC:ArchivePagination 2026-07-08-00:00:
-  FN-7659 — the Archived column's "Show more" is server-backed (fetches the
-  next 100-item page ordered `archivedAt DESC` from the API), distinct from
-  `handleLoadMore` above which only reveals more of an already-fetched
-  client-side array for non-archived columns.
-  */
-  const [isLoadingMoreArchived, setIsLoadingMoreArchived] = useState(false);
-  const handleLoadMoreArchived = useCallback(async () => {
-    if (!onLoadMoreArchived || isLoadingMoreArchived) return;
-    setIsLoadingMoreArchived(true);
+  const [isLoadingMoreServer, setIsLoadingMoreServer] = useState(false);
+  const handleLoadMoreServer = useCallback(async () => {
+    if (!onLoadMoreServer || isLoadingMoreServer) return;
+    setIsLoadingMoreServer(true);
     try {
-      await onLoadMoreArchived();
+      await onLoadMoreServer();
     } finally {
-      setIsLoadingMoreArchived(false);
+      setIsLoadingMoreServer(false);
     }
-  }, [onLoadMoreArchived, isLoadingMoreArchived]);
+  }, [onLoadMoreServer, isLoadingMoreServer]);
 
   /*
   FNXC:BoardColumnMenu 2026-08-27-12:01:
@@ -566,7 +546,7 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
   const isReviewColumn = isReviewColumnRole(columnFlags, column);
   const hasColumnBulkActions = isTodoLikeColumn || isProcessingColumn || isReviewColumn;
   const isMenuBusy = isReplanning || isPausingAll;
-  const columnLabelText = workflowMode ? (columnDisplayName ?? COLUMN_LABELS[column] ?? column) : COLUMN_LABELS[column];
+  const columnLabelText = workflowMode ? (columnDisplayName ?? COLUMN_LABELS[column] ?? column) : (COLUMN_LABELS[column] ?? column);
 
   const handlePauseAll = useCallback(async () => {
     if (!onPauseTask) return;
@@ -600,22 +580,12 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
 
 
   /*
-  FNXC:DoneColumnSorting 2026-06-29-20:23:
-  In workflow mode, the Done-sort control belongs to non-archived complete lanes even when the workflow uses a custom column id such as `shipped`; legacy mode remains limited to the literal Done column.
-  */
-  /* Complete AND not archived: the archived lane is also "complete-ish" but must not carry the
-     Done-sort control, and that exclusion survives the move to the shared helper. */
-  /*
-  FNXC:TaskColumnSorting 2026-08-18-21:24:
-  Every visible Board lane uses the same existing actions menu and keeps its own local mode.
-  The physical Archived lane is the sole server-backed exception: Board passes its committed
-  hook mode and callback here, while the hook fences replacement pages before committing.
+  FNXC:TaskColumnSorting 2026-09-04-10:36:
+  Every visible Board lane uses the same actions menu and keeps its own local ordering mode. Server pagination selects newest Done-page membership first; this control orders only the bounded rows already loaded.
   */
   const effectiveSortMode = sortMode ?? doneSortMode;
   const effectiveSortModeChange = onSortModeChange ?? onDoneSortModeChange;
   const showSortControl = effectiveSortMode !== undefined && !!effectiveSortModeChange;
-  const isDoneSortColumn = isCompleteColumnRole(columnFlags, column) && !isArchivedColumnRole(columnFlags, column);
-  const showDoneArchiveAction = isDoneSortColumn && !!onArchiveAllDone;
   /*
   FNXC:PlanApproval 2026-07-01-08:44:
   Triage and workflow intake/planning column actions need a Board shortcut that mirrors the project auto-approve plan override without replacing Settings modal's full workflow/auto-approve/require-all editor.
@@ -624,7 +594,7 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
   This shortcut belongs ONLY to the intake/planning column, never to hold (Todo-like) columns — the built-in Coding workflow's Todo column carries the hold trait and was wrongly surfacing this toggle. Board.tsx is the single source of truth gating which columns receive `onTogglePlanAutoApprove`; Column.tsx just renders whatever prop it is given, so the fix lives in Board.tsx's intake-only gate, not here.
   */
   const hasPlanAutoApproveAction = !!onTogglePlanAutoApprove;
-  const hasColumnMenu = hasColumnBulkActions || showSortControl || showDoneArchiveAction || hasPlanAutoApproveAction;
+  const hasColumnMenu = hasColumnBulkActions || showSortControl || hasPlanAutoApproveAction;
   const sortControlLabel = t("column.sortControlLabel", "Sort tasks in this column");
   const sortOptions: Array<{ mode: TaskColumnSortMode; label: string }> = [
     { mode: "completion-date-desc", label: t("column.sortArrivalDesc", "Arrival in this column — Completion date (newest first)") },
@@ -641,39 +611,24 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
     setIsMenuOpen(false);
   }, [onTogglePlanAutoApprove]);
 
-  const handleArchiveAll = useCallback(async () => {
-    setIsMenuOpen(false);
-    if (!onArchiveAllDone) return;
-    if (tasks.length === 0) return;
-
-    const confirmed = await confirm({
-      title: t("column.archiveAllTitle", "Archive All Done"),
-      message: t("column.archiveAllMessage", "Archive all {{count}} done tasks?", { count: tasks.length }),
-      danger: true,
-    });
-    if (!confirmed) return;
-
-    try {
-      const archived = await onArchiveAllDone();
-      addToast(t("column.archivedTasks", "Archived {{count}} tasks", { count: archived.length }), "success");
-    } catch (err) {
-      addToast(getErrorMessage(err) || t("column.failedToArchive", "Failed to archive tasks"), "error");
-    }
-  }, [onArchiveAllDone, tasks.length, addToast, confirm, t]);
 
   return (
     <div
-      className={`column${isArchived ? " column-archived" : ""}${isCollapsed ? " column-collapsed" : ""}`}
+      className="column"
       data-column={column}
     >
       <div className="column-header">
         <div className={`column-dot dot-${column}`} />
-        <h2>{workflowMode ? (columnDisplayName ?? COLUMN_LABELS[column] ?? column) : COLUMN_LABELS[column]}</h2>
+        <h2>{workflowMode ? (columnDisplayName ?? COLUMN_LABELS[column] ?? column) : (COLUMN_LABELS[column] ?? column)}</h2>
         <span
           className={`column-count${countFlashing ? " count-flash" : ""}`}
-          aria-label={t("column.executingOfTotal", "{{active}} executing of {{total}}", { active: activeTaskCount, total: tasks.length })}
+          aria-label={isCompleteColumn
+            ? t("column.taskCount", "{{total}} tasks", { total: displayedTaskCount.toLocaleString() })
+            : t("column.executingOfTotal", "{{active}} executing of {{total}}", { active: activeTaskCount, total: displayedTaskCount })}
         >
-          <span>{activeTaskCount}</span>/<span>{tasks.length}</span>
+          {isCompleteColumn
+            ? <span>{displayedTaskCount.toLocaleString()}</span>
+            : <><span>{activeTaskCount}</span>/<span>{displayedTaskCount}</span></>}
         </span>
         {isReviewColumn && onToggleAutoMerge && (
           <label className="auto-merge-toggle" title={autoMerge ? t("column.autoMergeEnabled", "Auto-merge enabled") : t("column.autoMergeDisabled", "Auto-merge disabled")}>
@@ -697,23 +652,8 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
           </button>
         )}
 
-        {isArchived && onToggleCollapse && (
-          <button
-            className="btn btn-icon btn-sm"
-            onClick={onToggleCollapse}
-            title={collapsed ? t("column.expandArchivedTitle", "Expand archived tasks") : t("column.collapseArchivedTitle", "Collapse archived tasks")}
-            aria-label={collapsed ? t("column.expandArchivedLabel", "Expand archived tasks") : t("column.collapseArchivedLabel", "Collapse archived tasks")}
-          >
-            {/* Directional chevrons stay explicit for clearer collapsed-state affordance in compact headers. */}
-            {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-          </button>
-        )}
         {hasColumnMenu && (
           <div className="column-menu" ref={menuRef}>
-            {/**
-            FNXC:DoneColumnActions 2026-06-30-00:00:
-            Done and workflow complete-column archive/sort affordances must share this column actions dropdown with existing bulk actions, preventing duplicate header controls on desktop and mobile while preserving the original sort modes and archive confirmation path.
-            */}
             <button
               type="button"
               className="btn btn-icon btn-sm"
@@ -771,22 +711,6 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
                     ))}
                   </div>
                 )}
-                {showDoneArchiveAction && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="column-menu-item"
-                    onClick={() => void handleArchiveAll()}
-                    disabled={tasks.length === 0}
-                  >
-                    {t("column.archiveAllDoneTitle", "Archive all done tasks")}
-                    <span className="column-menu-item-hint">
-                      {tasks.length === 0
-                        ? t("column.noDoneTasksToArchive", "No done tasks to archive")
-                        : t("column.archiveAllDoneHint", "Archive {{count}} done task{{plural}}", { count: tasks.length, plural: tasks.length === 1 ? "" : "s" })}
-                    </span>
-                  </button>
-                )}
                 {isTodoLikeColumn && (
                   <button
                     type="button"
@@ -824,11 +748,10 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
           </div>
         )}
       </div>
-      {!isCollapsed && resolvedColumnDescription && (
+      {resolvedColumnDescription && (
         <p className="column-desc">{resolvedColumnDescription}</p>
       )}
-      {!isCollapsed && (
-        <div className="column-body">
+      <div className="column-body">
           {canCreateInColumn && (
             <QuickEntryBox 
               onCreate={handleQuickCreate}
@@ -886,8 +809,6 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
                   onResetTask={onResetTask}
                   onDuplicateTask={onDuplicateTask}
                   onMergeTask={onMergeTask}
-                  onArchiveTask={onArchiveTask}
-                  onUnarchiveTask={onUnarchiveTask}
                   onRevertTask={onRevertTask}
                   onDeleteTask={onDeleteTask}
                   onOpenDetailWithTab={onOpenDetailWithTab}
@@ -929,8 +850,6 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
                   onResetTask={onResetTask}
                   onDuplicateTask={onDuplicateTask}
                   onMergeTask={onMergeTask}
-                  onArchiveTask={onArchiveTask}
-                  onUnarchiveTask={onUnarchiveTask}
                   onRevertTask={onRevertTask}
                   onReviseTask={onReviseTask}
                   onDeleteTask={onDeleteTask}
@@ -958,33 +877,23 @@ function ColumnComponent({ column, tasks, projectId, maxWorktrees, showWorktreeG
                   {t("column.loadMore", "Load {{count}} more ({{remaining}} remaining)", { count: Math.min(VISIBLE_TASKS_INCREMENT, hiddenTaskCount), remaining: hiddenTaskCount })}
                 </button>
               )}
-              {/*
-              FNXC:ArchivePagination 2026-07-08-00:00:
-              FN-7659 — the Archived column's "Show more" only renders when the
-              server reports another page beyond what's currently loaded
-              (archivedHasMore), so an empty archive or an archive smaller than
-              one page never shows the button (no empty shell on desktop or
-              mobile). Distinct from the shouldPaginate/handleLoadMore button
-              above, which reveals more of an already-fetched client array for
-              non-archived columns.
-              */}
-              {isArchived && archivedHasMore && (
+              {/* The server button appears only after every loaded card is visible, avoiding two competing pagination controls. */}
+              {serverHasMore && hiddenTaskCount === 0 && (
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
-                  onClick={handleLoadMoreArchived}
-                  disabled={archivedLoadingMore || isLoadingMoreArchived}
+                  onClick={handleLoadMoreServer}
+                  disabled={serverLoadingMore || isLoadingMoreServer}
                 >
-                  {(archivedLoadingMore || isLoadingMoreArchived)
-                    ? t("column.loadMoreArchivedLoading", "Loading\u2026")
-                    : t("column.loadMoreArchived", "Show more")}
+                  {(serverLoadingMore || isLoadingMoreServer)
+                    ? t("column.loadMoreCompletedLoading", "Loading\u2026")
+                    : t("column.loadMoreCompleted", "Show more")}
                 </button>
               )}
             </>
           )}
           <PluginSlot slotId="board-column-footer" projectId={projectId} />
         </div>
-      )}
     </div>
   );
 }

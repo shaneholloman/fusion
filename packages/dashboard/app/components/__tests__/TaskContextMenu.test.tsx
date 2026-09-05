@@ -32,7 +32,6 @@ describe("TaskContextMenu shared task action model", () => {
     expect(buildTaskActionMenuModel({ task: makeTask({ column: "triage" }), t, onRetry }).shouldShowActionsMenu).toBe(true);
     expect(actionIds(makeTask({ column: "in-review" }), { onRetry, onReset: vi.fn(), onOpenRefine: vi.fn() })).toEqual(["refine", "retry", "pause", "reset", "delete"]);
     expect(actionIds(makeTask({ column: "done" }), { onRetry, onReset: vi.fn(), onOpenRefine: vi.fn() })).toEqual(["refine", "delete"]);
-    expect(actionIds(makeTask({ column: "archived" }), { onRetry, onReset: vi.fn() })).toEqual(["delete"]);
   });
 
   it("offers exactly the supported recovery actions", () => {
@@ -52,7 +51,6 @@ describe("TaskContextMenu shared task action model", () => {
       expect(actionIds(task, { onRetry, onReset })).toEqual(["retry", "pause", "reset", "delete"]);
     }
     expect(actionIds(makeTask({ column: "done" }), { onRetry, onReset })).toEqual(["delete"]);
-    expect(actionIds(makeTask({ column: "archived" }), { onRetry, onReset, currentColumnFlags: { archived: true } })).toEqual(["delete"]);
   });
 
   it("exposes Plan only for pre-execution hold columns with a host callback", () => {
@@ -80,7 +78,6 @@ describe("TaskContextMenu shared task action model", () => {
       expect(actionIds(makeTask({ column }), { onPlan })).not.toContain("plan");
     }
     expect(actionIds(makeTask({ column: "complete" as any }), { onPlan, currentColumnFlags: { hold: true, complete: true } })).not.toContain("plan");
-    expect(actionIds(makeTask({ column: "cold-storage" as any }), { onPlan, currentColumnFlags: { hold: true, archived: true } })).not.toContain("plan");
     expect(actionIds(makeTask({ column: "triage" }))).not.toContain("plan");
 
     buildTaskActionMenuModel({ task: makeTask({ column: "triage" }), t, onPlan }).actions.find((action) => action.id === "plan")?.onSelect?.();
@@ -193,25 +190,6 @@ describe("TaskContextMenu shared task action model", () => {
 
       prAutomationLabel: "Merging PR…",
     }).reviewAction).toMatchObject({ id: "pr-automation", label: "Merging PR…", disabled: true });
-  });
-
-  it("keeps archived delete available without live-only destructive shells", () => {
-    const onDelete = vi.fn();
-    const archivedModel = buildTaskActionMenuModel({
-      task: makeTask({ column: "archived" }),
-      t,
-
-      hasResetHandler: true,
-      onReset: vi.fn(),
-      onTogglePause: vi.fn(),
-      onDelete,
-    });
-
-    expect(archivedModel.actions.map((action) => action.id)).toEqual(["delete"]);
-    expect(archivedModel.actions.map((action) => action.id)).not.toContain("pause");
-    expect(archivedModel.actions.map((action) => action.id)).not.toContain("reset");
-    archivedModel.actions.find((action) => action.id === "delete")?.onSelect?.();
-    expect(onDelete).toHaveBeenCalledTimes(1);
   });
 
   it("renders descriptors and delegates selection to injected host handlers", () => {

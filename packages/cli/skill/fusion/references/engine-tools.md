@@ -18,7 +18,7 @@ This reference documents tools injected by the engine at runtime for specific ag
 
 For cross-task publication, read first and pass both returned values when practical: `{ "task_id": "FX-002", "key": "evidence", "content": "rebased evidence", "expected_revision": 3, "expected_content_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }`. Revision zero is create-if-absent. A stale write is an error result with `TASK_DOCUMENT_PRECONDITION_FAILED` and current revision/hash; re-read and explicitly rebase rather than retrying unchanged. Omitted expectations preserve unconditional compatibility.
 
-Archived publication is deliberately absent from every runtime tool schema: there is no append, `allowArchived`, force, or replacement path in `fn_task_document_write`. Operators use the daemon-bearer-authenticated `POST /api/tasks/:id/documents/:key/archived-publications` API; `--no-auth` fails closed. Agent tools may read a retained archived document only when an explicit key is supplied, while keyless list mode continues to hide archived registries.
+Task archiving and archived-document publication are absent from every runtime tool schema. Agent tools may read a retained historical document only when an explicit key is supplied, while keyless list mode hides soft-deleted and historical parents.
 | `fn_task_prompt_write` | plan/spec review (Plan Review reviewer) | Replace the task's authoritative PROMPT.md with revised plan/spec content during Plan Review/spec repair; routed through TaskStore so PROMPT.md validation and task.json sync stay the single persistence path. Provide the complete final PROMPT.md content; do not implement product code from plan review | `content` (string) |
 | `fn_goal_list` | triage, executor, heartbeat | List goals with concise citation-ready snippets and active-goal warning details | `status?` (`active` \| `archived` \| `all`) |
 | `fn_goal_show` | triage, executor, heartbeat | Show one goal's full detail on demand, including the full description body | `id` (string) |
@@ -70,7 +70,7 @@ Archived publication is deliberately absent from every runtime tool schema: ther
 | Tool | Purpose | Parameters |
 |---|---|---|
 | `fn_task_list` | List active tasks during specification (duplicate check, discovery) | none |
-| `fn_task_search` | Keyword search tasks (including done/archived by default) for duplicate detection | `query` (string), `limit?` (number), `includeDone?` (boolean), `includeArchived?` (boolean) |
+| `fn_task_search` | Keyword search over live tasks for duplicate detection | `query` (string), `limit?` (number), `includeDone?` (boolean) |
 | `fn_task_show` | Fetch full task detail including PROMPT.md | `id` (string) |
 | `fn_review_spec` | Spawn spec reviewer and return `APPROVE`/`REVISE`/`RETHINK`/`UNAVAILABLE` | none |
 

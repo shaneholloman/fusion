@@ -56,7 +56,7 @@ Decision-only or investigation tasks can also declare `noCommitsExpected` / `**N
 | Legacy coding | `builtin:legacy-coding` | Original monolithic coding lifecycle for tasks that should not use graph-owned step execution. |
 | Quick fix | `builtin:quick-fix` | Short explicitly selected path for trivial or decision work; omits the standard review stage. No-commit markers do not route tasks here automatically. |
 | Review-heavy | `builtin:review-heavy` | Standard execute/review/merge path with an additional gated security review. |
-| Marketing | `builtin:marketing` | Content pipeline with custom Ideation, Backlog, Drafting, Editorial review, Published, and Archived columns plus structured marketing brief/draft/editorial prompts; drafts are persisted as task documents for review while the workflow reuses standard lifecycle traits and merge primitives. |
+| Marketing | `builtin:marketing` | Content pipeline with custom Ideation, Backlog, Drafting, Editorial review, and Published columns plus structured marketing brief/draft/editorial prompts; drafts are persisted as task documents for review while the workflow reuses standard lifecycle traits and merge primitives. |
 | Compound engineering | `builtin:compound-engineering` | Plugin-gated CE workflow that invokes `/ce-plan`, optional advisory `ce-doc-review` (markdown autofix; HTML DOM-safe mutation with report-only fallback), `/ce-work`, merge-blocking `/ce-code-review`, CE PR/feedback skills, Fusion merge, and learnings capture. |
 | Coding (per-step review) | `builtin:stepwise-coding` | Graph-executor workflow with default-on Plan Review before execution, per-step parse/execute/review/rework, and an optional final Code Review gate. |
 | Design | `builtin:design` | UI-heavy work path that implements, persists a user-facing design preview task document, runs a gated design/UX review, then performs the standard review and merge. |
@@ -156,7 +156,7 @@ For capacity-dispatched custom workflows, author or migrate the workflow as IR v
 }
 ```
 
-If you need the full lifecycle behavior, duplicate `builtin:coding` (or another selectable built-in) and edit the copy so `in-review`, `done`, and `archived` keep their merge/review/completion traits. FN-7190 keeps selectable built-ins on canonical traits; FN-7192 documents and tests the custom-v1 migration boundary.
+If you need the full lifecycle behavior, duplicate `builtin:coding` (or another selectable built-in) and edit the copy so its review and completion columns keep their merge/review/completion traits. FN-7190 keeps selectable built-ins on canonical traits; FN-7192 documents and tests the custom-v1 migration boundary.
 
 ### Workflow graph integrity validation
 
@@ -256,7 +256,7 @@ A valid close follows the graph's explicit terminal no-op route before parsing o
 
 `builtin:stepwise-coding` displays as Coding (per-step review). It is backed by `BUILTIN_STEPWISE_CODING_WORKFLOW_IR`; it keeps the same lifecycle columns/traits while adding the default-on optional Plan Review before `parse-steps`, modeling per-step parse/execute/review/rework as authored graph structure, and retaining the post-foreach optional Code Review gate before its final review/merge region.
 
-`builtin:marketing` is a non-coding content workflow with marketing-specific columns (`ideation`, `backlog`, `drafting`, `editorial-review`, `published`, `archived`) and prompt seams for content brief, draft, and editorial review. Its draft stage saves the primary content deliverable as a task document for human review, while the workflow uses the same lifecycle traits (`intake`, `hold`, `wip`, `merge-blocker`, `human-review`, `complete`, `archived`) and the same merge-gate/branch-group/merge-attempt primitive region as coding workflows, so scheduler, capacity, review blocking, and merge orchestration behavior remain standard.
+`builtin:marketing` is a non-coding content workflow with marketing-specific columns (`ideation`, `backlog`, `drafting`, `editorial-review`, `published`) and prompt seams for content brief, draft, and editorial review. Its draft stage saves the primary content deliverable as a task document for human review, while the workflow uses the same lifecycle traits (`intake`, `hold`, `wip`, `merge-blocker`, `human-review`, `complete`) and the same merge-gate/branch-group/merge-attempt primitive region as coding workflows, so scheduler, capacity, review blocking, and merge orchestration behavior remain standard.
 
 
 <!--

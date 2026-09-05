@@ -72,7 +72,7 @@ function harness(
     getRootDir: vi.fn(() => "/repo"),
     getTasksDir: vi.fn(() => ""),
   } as unknown as TaskStore;
-  resolveTaskLifecycleColumnsMock.mockResolvedValue({ complete: "done", archived: "archived" });
+  resolveTaskLifecycleColumnsMock.mockResolvedValue({ complete: "done" });
   return { task, store, transitions, logged, manager: new SelfHealingManager(store, { rootDir: "/repo" }) };
 }
 
@@ -114,7 +114,6 @@ describe("reconcileStrandedWorkflowContinuations", () => {
   it("retires rows whose task can never run them again", async () => {
     for (const taskOverrides of [
       { column: "archived", deletedAt: stale(1) },
-      { column: "archived" },
       { column: "done" },
     ] as Array<Partial<Task>>) {
       for (const state of ["running", "held", "runnable", "retrying"] as const) {
@@ -127,7 +126,7 @@ describe("reconcileStrandedWorkflowContinuations", () => {
 
   it("does not treat default column ids as terminal for a custom workflow", async () => {
     const { manager, transitions } = harness([item()], { column: "done" });
-    resolveTaskLifecycleColumnsMock.mockResolvedValue({ complete: "shipped", archived: "retired" });
+    resolveTaskLifecycleColumnsMock.mockResolvedValue({ complete: "shipped" });
 
     await expect(manager.reconcileStrandedWorkflowContinuations()).resolves.toBe(1);
     expect(transitions[0]?.state).toBe("runnable");

@@ -2677,7 +2677,7 @@ export class MissionStore extends EventEmitter<MissionStoreEvents> {
       .get(taskId) as { id: string } | undefined;
     if (!liveTask) {
       throw new Error(
-        `Cannot link feature ${featureId} to task ${taskId}: task is not on the active board (it may be archived, deleted, or never existed). Only active tasks can be linked to features.`,
+        `Cannot link feature ${featureId} to task ${taskId}: task is not on the active board (it may be deleted, historical, or never existed). Only active tasks can be linked to features.`,
       );
     }
 
@@ -2805,7 +2805,7 @@ export class MissionStore extends EventEmitter<MissionStoreEvents> {
       .get(taskId) as { id: string } | undefined;
     if (!liveTask) {
       throw new Error(
-        `Cannot re-point feature ${featureId} to task ${taskId}: task is not on the active board (it may be archived, deleted, or never existed). Only active tasks can be linked to features.`,
+        `Cannot re-point feature ${featureId} to task ${taskId}: task is not on the active board (it may be deleted, historical, or never existed). Only active tasks can be linked to features.`,
       );
     }
     const conflictingFeature = this.db

@@ -1621,36 +1621,6 @@ describe("TaskDetailModal delete affordance", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
-  it("archives done task when Archive Instead is chosen", async () => {
-    const user = userEvent.setup();
-    const onArchiveTask = vi.fn(async () => makeTask({ column: "archived" }));
-    const onDeleteTask = vi.fn(async () => makeTask());
-    const onClose = vi.fn();
-    mockConfirmWithChoice.mockResolvedValueOnce("tertiary");
-
-    render(
-      <TaskDetailModal
-        initialTab="details"
-        task={makeTask({ column: "done" })}
-        onClose={onClose}
-        onDeleteTask={onDeleteTask}
-        onArchiveTask={onArchiveTask}
-        onMergeTask={noopMerge}
-        onOpenDetail={noopOpenDetail}
-        addToast={noop}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
-
-    await waitFor(() => {
-      expect(mockConfirmWithChoice).toHaveBeenCalledWith(expect.objectContaining({ tertiaryLabel: "Archive Instead" }));
-      expect(onArchiveTask).toHaveBeenCalledWith("FN-099");
-      expect(onDeleteTask).not.toHaveBeenCalled();
-      expect(onClose).toHaveBeenCalled();
-    });
-  });
 });
 
 describe("TaskDetailModal in-review stall diagnostics", () => {

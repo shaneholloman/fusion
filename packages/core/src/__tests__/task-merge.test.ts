@@ -945,7 +945,7 @@ describe("getTaskCompletionBlocker", () => {
     }, { resolveTask })).resolves.toBeUndefined();
   });
 
-  it.each(["done", "archived"] as const)("ignores blockedBy when resolveTask reports the blocker is %s", async (column) => {
+  it.each(["done"] as const)("ignores blockedBy when resolveTask reports the blocker is %s", async (column) => {
     const resolveTask = async () => ({ id: "FN-4054", column });
 
     await expect(getTaskCompletionBlocker({

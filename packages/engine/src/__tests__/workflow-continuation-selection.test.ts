@@ -19,15 +19,14 @@ function task(id: string, patch: Partial<Task> = {}): Task {
 }
 
 describe("isPlanningContinuationTaskDispatchable", () => {
-  it("rejects missing, paused, soft-deleted, archived, and done tasks", () => {
+  it("rejects missing, paused, soft-deleted, and done tasks", () => {
     expect(isPlanningContinuationTaskDispatchable(undefined)).toBe(false);
     expect(isPlanningContinuationTaskDispatchable(null)).toBe(false);
     expect(isPlanningContinuationTaskDispatchable(task("T-1", { paused: true }))).toBe(false);
     expect(isPlanningContinuationTaskDispatchable(task("T-2", { userPaused: true }))).toBe(false);
     expect(isPlanningContinuationTaskDispatchable(task("T-3", { deletedAt: "2026-07-22T05:15:38.174Z" }))).toBe(false);
-    expect(isPlanningContinuationTaskDispatchable(task("T-4", { column: "archived" }))).toBe(false);
-    expect(isPlanningContinuationTaskDispatchable(task("T-5", { column: "done" }))).toBe(false);
-    expect(isPlanningContinuationTaskDispatchable(task("T-6", { column: "todo" }))).toBe(true);
+    expect(isPlanningContinuationTaskDispatchable(task("T-4", { column: "done" }))).toBe(false);
+    expect(isPlanningContinuationTaskDispatchable(task("T-5", { column: "todo" }))).toBe(true);
   });
 });
 
@@ -46,11 +45,8 @@ describe("resolvePlanningContinuationCandidate", () => {
     });
   });
 
-  it("marks terminal board tasks as orphans even when getTask returns an archive fallback", () => {
+  it("marks completed and soft-deleted board tasks as orphans", () => {
     const item = workItem("orphan-terminal", "planning");
-    expect(
-      resolvePlanningContinuationCandidate(item, task("FN-8470", { column: "archived" })),
-    ).toEqual({ kind: "orphan", item, reason: "task-terminal" });
     expect(
       resolvePlanningContinuationCandidate(item, task("FN-8401", { column: "done" })),
     ).toEqual({ kind: "orphan", item, reason: "task-terminal" });
@@ -122,7 +118,7 @@ describe("selectActionablePlanningContinuations", () => {
   it("retains every continuation whose task is present, unpaused, and non-terminal", () => {
     /*
     FNXC:WorkflowScheduling 2026-07-21-22:31:
-    Regression for the FN-8470→FN-8471 starvation class: a deleted/archived
+    Regression for the FN-8470→FN-8471 starvation class: a deleted or completed
     earlier due row must not remain "actionable" and must not prevent a later
     live planning continuation from being selected.
 
@@ -139,7 +135,6 @@ describe("selectActionablePlanningContinuations", () => {
       { item: workItem("no-wait-reason", null), task: task("T-5") },
       { item: workItem("paused", "planning"), task: task("T-3", { paused: true }) },
       { item: workItem("user-paused", "planning"), task: task("T-4", { userPaused: true }) },
-      { item: workItem("archived", "planning"), task: task("FN-8470", { column: "archived" }) },
       { item: workItem("done", "planning"), task: task("FN-done", { column: "done" }) },
       { item: workItem("soft-deleted", "planning"), task: task("FN-soft", { deletedAt: "2026-07-22T05:15:38.174Z" }) },
       { item: workItem("later-live", "planning"), task: task("FN-8471", { column: "todo" }) },
@@ -160,7 +155,7 @@ workflow-planning-continuation-terminal-gap-live-e2e.pg.test.ts documented):
 
 `resolvePlanningContinuationCandidate` applied the caller's resolved terminal set to its OWN check and
 then delegated to `isPlanningContinuationTaskDispatchable(task)` WITHOUT it, so the inner predicate
-re-tested against the legacy `done`/`archived` pair.
+re-tested against the built-in fallback.
 
 THE REACHABLE CASE is a board that declares `done` as a NON-terminal column id — legal, and the shape a
 project gets by repurposing a default column rather than renaming one. The outer check passes (the

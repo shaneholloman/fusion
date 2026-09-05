@@ -15,7 +15,7 @@ export interface GhostBugProbeResult {
 }
 
 export interface GhostBugDecision {
-  decision: "archive" | "pass";
+  decision: "delete" | "pass";
   reason: string;
   findings: GhostBugProbeResult[];
 }
@@ -152,7 +152,7 @@ export async function runGhostBugPreflight(
 
   if (definitive.every((finding) => finding.matched === false)) {
     return {
-      decision: "archive",
+      decision: "delete",
       reason: "all_cited_constructs_missing_on_main",
       findings,
     };

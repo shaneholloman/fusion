@@ -103,8 +103,6 @@ export {
   createWorkflowDeleteTool,
   createWorkflowSettingsTool,
   createTraitListTool,
-  createTaskArchiveTool,
-  createTaskUnarchiveTool,
   createTaskDeleteTool,
   createTaskRetryTool,
   createTaskPauseTool,
@@ -1274,7 +1272,6 @@ export {
   genericCliAdapter,
   type CliAdapterDescriptor,
 } from "./cli-agent/adapters/index.js";
-export { installBaselineArchiveWorktreeDisposer } from "./healing/archive-worktree-disposer-install.js";
 export { MemoryConsolidationService, resolveMemoryConsolidationPorts } from "./memory/index.js";
 
 // CLI Agent Executor — task ↔ session orchestration (U7).

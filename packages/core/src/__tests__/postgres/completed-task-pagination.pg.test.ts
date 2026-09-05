@@ -1,0 +1,77 @@
+import { beforeAll, beforeEach, afterEach, afterAll, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
+import * as schema from "../../postgres/schema/index.js";
+import {
+  pgDescribe,
+  createSharedPgTaskStoreTestHarness,
+  type SharedPgTaskStoreHarness,
+} from "../../__test-utils__/pg-test-harness.js";
+
+pgDescribe("TaskStore completed-task pagination", () => {
+  const h: SharedPgTaskStoreHarness = createSharedPgTaskStoreTestHarness({ prefix: "fusion_done_page" });
+
+  beforeAll(h.beforeAll);
+  beforeEach(h.beforeEach);
+  afterEach(h.afterEach);
+  afterAll(h.afterAll);
+
+  it("returns bounded, non-overlapping Done pages with an exact live total", async () => {
+    const store = h.store();
+    const first = await store.createTask({ description: "first done", column: "done" });
+    const current = await store.createTask({ description: "current", column: "todo" });
+    const second = await store.createTask({ description: "second done", column: "done" });
+    const deleted = await store.createTask({ description: "deleted done", column: "done" });
+    const third = await store.createTask({ description: "third done", column: "done" });
+    await store.deleteTask(deleted.id);
+    await Promise.all([
+      [first.id, "2026-08-01T00:00:00.000Z"],
+      [second.id, "2026-08-02T00:00:00.000Z"],
+      [third.id, "2026-08-04T00:00:00.000Z"],
+    ].map(([id, columnMovedAt]) => h.layer().db
+      .update(schema.project.tasks)
+      .set({ columnMovedAt })
+      .where(eq(schema.project.tasks.id, id!))));
+
+    const pageOne = await store.listCompletedTasks({ limit: 2, offset: 0, slim: true });
+    const pageTwo = await store.listCompletedTasks({ limit: 2, offset: 2, slim: true });
+
+    expect(pageOne.total).toBe(3);
+    expect(pageOne.hasMore).toBe(true);
+    expect(pageTwo.total).toBe(3);
+    expect(pageTwo.hasMore).toBe(false);
+    expect(pageOne.tasks).toHaveLength(2);
+    expect(pageTwo.tasks).toHaveLength(1);
+    expect([...pageOne.tasks, ...pageTwo.tasks].map((task) => task.id)).toEqual([
+      third.id,
+      second.id,
+      first.id,
+    ]);
+    expect([...pageOne.tasks, ...pageTwo.tasks].map((task) => task.id)).not.toContain(current.id);
+    expect([...pageOne.tasks, ...pageTwo.tasks].map((task) => task.id)).not.toContain(deleted.id);
+  });
+
+  it("orders every task-id page in SQL before applying offsets", async () => {
+    const store = h.store();
+    const high = await store.createTaskWithReservedId(
+      { description: "high id", column: "done" },
+      { taskId: "FN-29520", applyDefaultWorkflowSteps: false },
+    );
+    const low = await store.createTaskWithReservedId(
+      { description: "low id", column: "done" },
+      { taskId: "FN-29503", applyDefaultWorkflowSteps: false },
+    );
+    const middle = await store.createTaskWithReservedId(
+      { description: "middle id", column: "done" },
+      { taskId: "FN-29511", applyDefaultWorkflowSteps: false },
+    );
+
+    const pageOne = await store.listCompletedTasks({ limit: 2, offset: 0, sort: "task-id-desc" });
+    const pageTwo = await store.listCompletedTasks({ limit: 2, offset: 2, sort: "task-id-desc" });
+
+    expect([...pageOne.tasks, ...pageTwo.tasks].map((task) => task.id)).toEqual([
+      high.id,
+      middle.id,
+      low.id,
+    ]);
+  });
+});

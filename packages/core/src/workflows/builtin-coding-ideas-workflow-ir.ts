@@ -49,7 +49,6 @@ const CODING_IDEAS_COLUMNS: WorkflowIrColumn[] = [
     traits: [{ trait: "merge-blocker" }, { trait: "human-review" }, { trait: "stall-detection" }, { trait: "merge" }],
   },
   { id: "done", name: "Done", traits: [{ trait: "complete" }] },
-  { id: "archived", name: "Archived", traits: [{ trait: "archived" }] },
 ];
 
 const RAW_BUILTIN_CODING_IDEAS_WORKFLOW_IR: WorkflowIr = (() => {

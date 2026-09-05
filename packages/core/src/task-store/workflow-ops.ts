@@ -435,7 +435,7 @@ export async function deleteWorkflowDefinitionImpl(store: TaskStore, id: string)
       try {
         await store.updateTask(row.taskId, { enabledWorkflowSteps: [] });
       } catch {
-        // Task may be deleted/archived; dangling step ids resolve to undefined
+        // Task may be deleted or historical-only; dangling step ids resolve to undefined
         // at execution time and are skipped.
       }
     }
@@ -452,8 +452,8 @@ export async function deleteWorkflowDefinitionImpl(store: TaskStore, id: string)
       `builtin:legacy-coding`; the catalog's actual default is `resolveDefaultWorkflowIr()`. Post-U11
       they differ by exactly the column this line reads:
 
-          default  todo, in-progress, in-review, done, archived
-          legacy   triage, todo, in-progress, in-review, done, archived
+          default  todo, in-progress, in-review, done
+          legacy   triage, todo, in-progress, in-review, done
 
       so `resolveEntryColumnId` answered `triage` for the legacy IR and `todo` for the default —
       measured, not inferred. The comment above already says "re-home each occupant to the DEFAULT

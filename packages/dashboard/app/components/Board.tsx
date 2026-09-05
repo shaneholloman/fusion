@@ -59,9 +59,6 @@ interface BoardProps {
   ) => Promise<Task>;
   onRetryTask?: (id: string) => Promise<Task>;
   onOpenChatWithPrefill?: (prefillText: string) => void;
-  onArchiveTask?: (id: string, options?: { removeLineageReferences?: boolean }) => Promise<Task>;
-  onUnarchiveTask?: (id: string) => Promise<Task>;
-  /* FNXC:TaskRevert 2026-07-05-00:00 (FN-7525): threaded alongside onArchiveTask/onUnarchiveTask. */
   onRevertTask?: (id: string, body?: RevertTaskOptions) => Promise<RevertTaskResult>;
   /** Opens a New Task draft using a reverted task description. */
   onReviseTask?: (task: Task) => void;
@@ -70,19 +67,12 @@ interface BoardProps {
     removeLineageReferences?: boolean;
     githubIssueAction?: GithubIssueAction;
   }) => Promise<Task>;
-  onArchiveAllDone?: () => Promise<Task[]>;
-  /** Lazy-load archived tasks. Called the first time the user expands the archived column. */
-  onLoadArchivedTasks?: () => Promise<void>;
-  /** FNXC:ArchivePagination 2026-07-08-00:00: FN-7659 — fetch the next 100-item page of archived tasks (newest-first). Threaded to the Archived column's server-backed "Show more" button. */
-  onLoadMoreArchivedTasks?: () => Promise<void>;
-  /** Committed server-backed order for the physical Archived lane. */
-  archivedSortMode?: TaskColumnSortMode;
-  /** Requests a new Archive order; the hook commits it only after page zero succeeds. */
-  onArchivedSortModeChange?: (mode: TaskColumnSortMode) => Promise<void>;
-  /** Whether another archived page is available beyond what is currently loaded. */
-  archivedHasMore?: boolean;
-  /** True while a "Show more" archived page fetch is in flight. */
-  archivedLoadingMore?: boolean;
+  onLoadMoreCompletedTasks?: () => Promise<void>;
+  completedTotal?: number;
+  completedHasMore?: boolean;
+  completedLoadingMore?: boolean;
+  completedSortMode?: TaskColumnSortMode;
+  onCompletedSortModeChange?: (mode: TaskColumnSortMode) => void;
   searchQuery?: string;
   availableModels?: ModelInfo[];
   /**
@@ -169,36 +159,24 @@ function BoardWorkflowSkeleton({ empty = false, t }: { empty?: boolean; t: TFunc
   );
 }
 
-/*
-FNXC:WorkflowResolvedColumns 2026-07-30-00:30 (batch-dashboard-app):
-Does this column offer "Archive all done"? The COMPLETE trait, matching the sibling spreads that
-already resolve `intake` and `mergeBlocker`/`humanReview` from the same `columnDef.flags`. The id
-check was the odd one out, so on a renamed board the action vanished from the completed column while
-its neighbouring affordances rendered correctly — an inconsistency inside one props spread, which is
-how it survived review.
-
-`archived` is excluded: that lane is also complete-ish and must not offer to archive its own
-contents. Hoisted to a named predicate because both render sites need it and a JSX attribute
-position cannot carry the explanation.
-*/
-function columnDefOffersArchiveAllDone(columnDef: { flags: { complete?: boolean; archived?: boolean } }): boolean {
-  return columnDef.flags.complete === true && columnDef.flags.archived !== true;
-}
-
-export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorktreeGrouping, onMoveTask, onPauseTask, onUnpauseTask, onResetTask, onDuplicateTask, onMergeTask, onOpenDetail, onOpenRefine, onOpenGroupModal, addToast, onQuickCreate, onNewTask, autoMerge, mergeStrategy = "direct", onToggleAutoMerge, planAutoApproveEnabled, onTogglePlanAutoApprove, globalPaused, onUpdateTask, onRetryTask, onOpenChatWithPrefill, onArchiveTask, onUnarchiveTask, onRevertTask, onReviseTask, onDeleteTask, onArchiveAllDone, onLoadArchivedTasks, onLoadMoreArchivedTasks, archivedSortMode, onArchivedSortModeChange, archivedHasMore, archivedLoadingMore, searchQuery = "", availableModels, onPlanningMode, onOpenDetailWithTab, favoriteProviders, favoriteModels, onToggleFavorite, onToggleModelFavorite, onOpenMission, staleHighFanoutBlockerAgeThresholdMs, lastFetchTimeMs, prAuthAvailable, onOpenWorkflowEditor, onCreateWorkflow, workflowControlsInHeader = false, active = true }: BoardProps) {
+export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorktreeGrouping, onMoveTask, onPauseTask, onUnpauseTask, onResetTask, onDuplicateTask, onMergeTask, onOpenDetail, onOpenRefine, onOpenGroupModal, addToast, onQuickCreate, onNewTask, autoMerge, mergeStrategy = "direct", onToggleAutoMerge, planAutoApproveEnabled, onTogglePlanAutoApprove, globalPaused, onUpdateTask, onRetryTask, onOpenChatWithPrefill, onRevertTask, onReviseTask, onDeleteTask, onLoadMoreCompletedTasks, completedTotal, completedHasMore, completedLoadingMore, completedSortMode = "completion-date-desc", onCompletedSortModeChange, searchQuery = "", availableModels, onPlanningMode, onOpenDetailWithTab, favoriteProviders, favoriteModels, onToggleFavorite, onToggleModelFavorite, onOpenMission, staleHighFanoutBlockerAgeThresholdMs, lastFetchTimeMs, prAuthAvailable, onOpenWorkflowEditor, onCreateWorkflow, workflowControlsInHeader = false, active = true }: BoardProps) {
   const { t } = useTranslation("app");
-  const [archivedCollapsed, setArchivedCollapsed] = useState(true);
   /*
   FNXC:TaskColumnSorting 2026-08-18-21:24:
   Board owns independent local modes per rendered lane. The arrival mode is the durable
   columnMovedAt order (with core's legacy timestamp fallbacks), and state is intentionally not
-  persisted as a project setting. Archive is committed by useTasks because its SQL page order
-  cannot be safely reconstructed from the loaded slice.
+  persisted as a project setting.
+
+  FNXC:DonePagination 2026-09-04-19:28:
+  A completion lane is controlled by useTasks because changing it must reload page zero from the
+  server; sorting only the loaded slice would make Show more append rows from a different order.
   */
   const [columnSortModes, setColumnSortModes] = useState<Record<string, TaskColumnSortMode>>({});
-  const getColumnSortMode = useCallback((laneKey: string): TaskColumnSortMode => (
-    columnSortModes[laneKey] ?? "completion-date-desc"
-  ), [columnSortModes]);
+  const getColumnSortMode = useCallback((laneKey: string, isCompletionColumn = false): TaskColumnSortMode => (
+    isCompletionColumn && onCompletedSortModeChange
+      ? completedSortMode
+      : (columnSortModes[laneKey] ?? "completion-date-desc")
+  ), [columnSortModes, completedSortMode, onCompletedSortModeChange]);
   const changeColumnSortMode = useCallback((laneKey: string, mode: TaskColumnSortMode) => {
     setColumnSortModes((current) => current[laneKey] === mode ? current : { ...current, [laneKey]: mode });
   }, []);
@@ -216,7 +194,6 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
   const [isAllWorkflowsViewSelected, setIsAllWorkflowsViewSelected] = useState(
     () => readBoardWorkflowViewSelection(projectId) === ALL_WORKFLOWS_BOARD_VIEW_ID,
   );
-  const archivedLoadedRef = useRef(false);
   const boardRef = useRef<HTMLElement | null>(null);
   const [boardElement, setBoardElement] = useState<HTMLElement | null>(null);
   /*
@@ -291,17 +268,6 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
       });
     };
   }, [active, projectId]);
-
-  const handleToggleArchivedCollapse = useCallback(() => {
-    setArchivedCollapsed((current) => {
-      const next = !current;
-      if (!next && !archivedLoadedRef.current && onLoadArchivedTasks) {
-        archivedLoadedRef.current = true;
-        void onLoadArchivedTasks();
-      }
-      return next;
-    });
-  }, [onLoadArchivedTasks]);
 
   /*
   FNXC:WorkflowColumns 2026-07-28-00:00 (U12 — R9, R8):
@@ -532,7 +498,7 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
     if (targetWorkflowId === ALL_WORKFLOWS_BOARD_VIEW_ID) return undefined;
     const workflow = boardWorkflows?.workflows.find((candidate) => candidate.id === targetWorkflowId);
     if (!workflow) return undefined;
-    const visibleColumns = workflow.columns.filter((column) => !column.flags.archived && !column.flags.hiddenFromBoard);
+    const visibleColumns = workflow.columns.filter((column) => !column.flags.hiddenFromBoard);
     const preferredColumn = preferredColumnId ? visibleColumns.find((column) => column.id === preferredColumnId) : undefined;
     const column = preferredColumn
       ?? visibleColumns.find((candidate) => candidate.flags.intake)
@@ -608,19 +574,14 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
     return created;
   }, [applyOptimisticTaskWorkflow, boardWorkflows, onQuickCreate, refreshBoardWorkflows, resolveWorkflowQuickCreateTarget]);
 
-  const selectedWorkflowArchivedColumn = useMemo(() => {
-    if (!selectedWorkflow) return null;
-    return selectedWorkflow.columns.find((column) => column.flags.archived) ?? null;
-  }, [selectedWorkflow]);
-
   const selectedWorkflowColumns = useMemo(() => {
     if (!selectedWorkflow) return [];
-    return selectedWorkflow.columns.filter((column) => !column.flags.archived && !column.flags.hiddenFromBoard);
+    return selectedWorkflow.columns.filter((column) => !column.flags.hiddenFromBoard);
   }, [selectedWorkflow]);
 
   const selectedWorkflowCreateColumnId = useMemo(() => {
-    return selectedWorkflowColumns.find((column) => column.flags.intake && !column.flags.archived)?.id
-      ?? selectedWorkflowColumns.find((column) => !column.flags.archived)?.id;
+    return selectedWorkflowColumns.find((column) => column.flags.intake)?.id
+      ?? selectedWorkflowColumns[0]?.id;
   }, [selectedWorkflowColumns]);
 
   const handleSelectedWorkflowNewTask = useCallback(() => {
@@ -710,7 +671,7 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
     for (const column of selectedWorkflow.columns) {
       grouped[column.id] = sortTasksForDisplayColumn(grouped[column.id] ?? [], column.id, {
         columnFlags: column.flags,
-        sortMode: getColumnSortMode(`${selectedWorkflow.id}:${column.id}`),
+        sortMode: getColumnSortMode(`${selectedWorkflow.id}:${column.id}`, Boolean(column.flags?.complete)),
       });
     }
     return grouped;
@@ -776,9 +737,6 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
   FNXC:WorkflowBoard 2026-06-29-18:37:
   Shared aggregate column ids must use the default workflow's label and trait flags when that workflow declares them; otherwise preserve the first workflow definition that introduced the id. This keeps "All workflows" deterministic for duplicate column names without OR-merging incompatible workflow traits.
 
-  FNXC:WorkflowBoard 2026-06-29-23:54:
-  Aggregate Board rendering separates active columns from archived columns after the deterministic union is built. This preserves the existing collapsed archived-column behavior while the main All workflows lane set stays limited to non-hidden, non-archived destinations.
-
   FNXC:WorkflowResolvedColumns 2026-07-27-14:35 (U10 / R8):
   The union is now built ONLY from the workflows the payload declares. It previously appended every id of the legacy `COLUMNS` enum with synthesised trait flags, which drew a phantom lane for any lifecycle column no workflow declares — the visible failure a removed column (U11 merging Todo into Planning) would ship. Those injected lanes also carried the raw column id as their label, so a lane named "in-progress" appeared beside properly named workflow lanes.
 
@@ -817,8 +775,8 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
       ...boardWorkflows.workflows.filter((workflow) => workflow.id !== boardWorkflows.defaultWorkflowId),
     ];
     for (const workflow of orderedWorkflows) {
-      const column = workflow.columns.find((candidate) => candidate.flags.intake && !candidate.flags.archived && !candidate.flags.hiddenFromBoard)
-        ?? workflow.columns.find((candidate) => !candidate.flags.archived && !candidate.flags.hiddenFromBoard);
+      const column = workflow.columns.find((candidate) => candidate.flags.intake && !candidate.flags.hiddenFromBoard)
+        ?? workflow.columns.find((candidate) => !candidate.flags.hiddenFromBoard);
       if (column) return { columnId: column.id, workflowId: workflow.id };
     }
     return null;
@@ -827,21 +785,6 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
   const handleAggregateWorkflowNewTask = useCallback(() => {
     onNewTask(aggregateQuickCreateTarget?.workflowId);
   }, [aggregateQuickCreateTarget?.workflowId, onNewTask]);
-
-  const aggregateVisibleBoardColumns = useMemo(
-    () => aggregateBoardColumns.filter((column) => column.flags.archived !== true),
-    [aggregateBoardColumns],
-  );
-
-  const aggregateArchivedBoardColumns = useMemo(
-    () => aggregateBoardColumns.filter((column) => column.flags.archived === true),
-    [aggregateBoardColumns],
-  );
-
-  const aggregateRenderedBoardColumns = useMemo(
-    () => [...aggregateVisibleBoardColumns, ...aggregateArchivedBoardColumns],
-    [aggregateArchivedBoardColumns, aggregateVisibleBoardColumns],
-  );
 
   const aggregateTasksByColumn = useMemo(() => {
     const grouped: Record<string, Task[]> = {};
@@ -904,7 +847,7 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
     for (const column of aggregateBoardColumns) {
       grouped[column.id] = sortTasksForDisplayColumn(grouped[column.id] ?? [], column.id, {
         columnFlags: column.flags,
-        sortMode: getColumnSortMode(`aggregate:${column.id}`),
+        sortMode: getColumnSortMode(`aggregate:${column.id}`, Boolean(column.flags?.complete)),
       });
     }
     return grouped;
@@ -979,14 +922,14 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
             ref={setBoardRef}
             {...boardMousePanBindings}
           >
-            {aggregateRenderedBoardColumns.map((columnDef) => {
+            {aggregateBoardColumns.map((columnDef) => {
               const isCreateColumn = aggregateQuickCreateTarget?.columnId === columnDef.id;
-              const laneSortMode = columnDef.flags.archived
-                ? (archivedSortMode ?? "completion-date-desc")
-                : getColumnSortMode(`aggregate:${columnDef.id}`);
-              const laneSortModeChange = columnDef.flags.archived
-                ? onArchivedSortModeChange
-                : columnSortModeChangeBinder(`aggregate:${columnDef.id}`);
+              const laneKey = `aggregate:${columnDef.id}`;
+              const isCompletionColumn = Boolean(columnDef.flags?.complete);
+              const laneSortMode = getColumnSortMode(laneKey, isCompletionColumn);
+              const laneSortModeChange = isCompletionColumn && onCompletedSortModeChange
+                ? onCompletedSortModeChange
+                : columnSortModeChangeBinder(laneKey);
               return (
                 <Column
                   key={columnDef.id}
@@ -1017,8 +960,6 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
                   onUpdateTask={onUpdateTask}
                   onRetryTask={onRetryTask}
                   onOpenChatWithPrefill={onOpenChatWithPrefill}
-                  onArchiveTask={onArchiveTask}
-                  onUnarchiveTask={onUnarchiveTask}
                   onRevertTask={onRevertTask}
                   onReviseTask={onReviseTask}
                   onDeleteTask={onDeleteTask}
@@ -1039,13 +980,11 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
                   autoMerge={autoMerge}
                   mergeStrategy={mergeStrategy}
                   // FNXC:PlanApproval 2026-07-07-00:00: FN-7653 — the plan auto-approve shortcut belongs only to the intake/planning column, never to hold (Todo-like) columns; the built-in Coding workflow's Todo column carries the hold trait and was wrongly receiving this prop pair.
-                  {...((columnDef.flags.intake && !columnDef.flags.archived && !columnDef.flags.complete && !columnDef.flags.countsTowardWip && !columnDef.flags.mergeBlocker && !columnDef.flags.humanReview) ? { planAutoApproveEnabled, onTogglePlanAutoApprove } : {})}
+                  {...((columnDef.flags.intake && !columnDef.flags.complete && !columnDef.flags.countsTowardWip && !columnDef.flags.mergeBlocker && !columnDef.flags.humanReview) ? { planAutoApproveEnabled, onTogglePlanAutoApprove } : {})}
                   {...(isCreateColumn && aggregateQuickCreateTarget ? { workflowId: aggregateQuickCreateTarget.workflowId, workflowOptions, defaultWorkflowId: boardWorkflows?.defaultWorkflowId ?? null, onQuickCreate: handleAggregateWorkflowQuickCreate, ...(!mobileFullTaskModalHidden ? { onNewTask: handleAggregateWorkflowNewTask } : {}) } : {})}
                   {...(columnDef.flags.mergeBlocker || columnDef.flags.humanReview ? { onToggleAutoMerge: handleToggleAutoMerge } : {})}
-                  {...(columnDefOffersArchiveAllDone(columnDef) ? { onArchiveAllDone } : {})}
-                  {...(laneSortModeChange ? { sortMode: laneSortMode, onSortModeChange: laneSortModeChange } : {})}
-                  {...(laneSortModeChange ? { doneSortMode: laneSortMode, onDoneSortModeChange: laneSortModeChange } : {})}
-                  {...(columnDef.flags.archived ? { collapsed: archivedCollapsed, onToggleCollapse: handleToggleArchivedCollapse, archivedHasMore, archivedLoadingMore, onLoadMoreArchived: onLoadMoreArchivedTasks } : {})}
+                  {...{ sortMode: laneSortMode, onSortModeChange: laneSortModeChange, doneSortMode: laneSortMode, onDoneSortModeChange: laneSortModeChange }}
+                  {...(columnDef.flags.complete && !isSearchActive ? { totalTaskCount: completedTotal, serverHasMore: completedHasMore, serverLoadingMore: completedLoadingMore, onLoadMoreServer: onLoadMoreCompletedTasks } : {})}
                 />
               );
             })}
@@ -1066,8 +1005,11 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
           {selectedWorkflowColumns.map((columnDef) => {
             const isCreateColumn = columnDef.id === selectedWorkflowCreateColumnId;
             const laneKey = `${selectedWorkflow.id}:${columnDef.id}`;
-            const laneSortMode = getColumnSortMode(laneKey);
-            const laneSortModeChange = columnSortModeChangeBinder(laneKey);
+            const isCompletionColumn = Boolean(columnDef.flags?.complete);
+            const laneSortMode = getColumnSortMode(laneKey, isCompletionColumn);
+            const laneSortModeChange = isCompletionColumn && onCompletedSortModeChange
+              ? onCompletedSortModeChange
+              : columnSortModeChangeBinder(laneKey);
             return (
               <Column
                 key={columnDef.id}
@@ -1100,8 +1042,6 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
                 onUpdateTask={onUpdateTask}
                 onRetryTask={onRetryTask}
                 onOpenChatWithPrefill={onOpenChatWithPrefill}
-                onArchiveTask={onArchiveTask}
-                onUnarchiveTask={onUnarchiveTask}
                 onRevertTask={onRevertTask}
                 onReviseTask={onReviseTask}
                 onDeleteTask={onDeleteTask}
@@ -1120,76 +1060,14 @@ export function Board({ tasks, projectId, maxConcurrent, maxWorktrees, showWorkt
                 autoMerge={autoMerge}
                 mergeStrategy={mergeStrategy}
                 // FNXC:PlanApproval 2026-07-07-00:00: FN-7653 — the plan auto-approve shortcut belongs only to the intake/planning column, never to hold (Todo-like) columns; the built-in Coding workflow's Todo column carries the hold trait and was wrongly receiving this prop pair.
-                {...((columnDef.flags.intake && !columnDef.flags.archived && !columnDef.flags.complete && !columnDef.flags.countsTowardWip && !columnDef.flags.mergeBlocker && !columnDef.flags.humanReview) ? { planAutoApproveEnabled, onTogglePlanAutoApprove } : {})}
+                {...((columnDef.flags.intake && !columnDef.flags.complete && !columnDef.flags.countsTowardWip && !columnDef.flags.mergeBlocker && !columnDef.flags.humanReview) ? { planAutoApproveEnabled, onTogglePlanAutoApprove } : {})}
                 {...(isCreateColumn ? { workflowOptions, defaultWorkflowId: selectedWorkflow.id, onQuickCreate: handleWorkflowQuickCreate, ...(!mobileFullTaskModalHidden ? { onNewTask: handleSelectedWorkflowNewTask } : {}) } : {})}
                 {...(columnDef.flags.mergeBlocker || columnDef.flags.humanReview ? { onToggleAutoMerge: handleToggleAutoMerge } : {})}
-                {...(columnDefOffersArchiveAllDone(columnDef) ? { onArchiveAllDone } : {})}
                 {...{ sortMode: laneSortMode, onSortModeChange: laneSortModeChange, doneSortMode: laneSortMode, onDoneSortModeChange: laneSortModeChange }}
+                {...(columnDef.flags.complete && !isSearchActive ? { totalTaskCount: completedTotal, serverHasMore: completedHasMore, serverLoadingMore: completedLoadingMore, onLoadMoreServer: onLoadMoreCompletedTasks } : {})}
               />
             );
           })}
-          {selectedWorkflowArchivedColumn && (
-            <Column
-              key={selectedWorkflowArchivedColumn.id}
-              column={selectedWorkflowArchivedColumn.id as ColumnType}
-              workflowMode
-              workflowId={selectedWorkflow.id}
-              columnDisplayName={selectedWorkflowArchivedColumn.name}
-              columnDescription={selectedWorkflowArchivedColumn.description}
-              columnFlags={selectedWorkflowArchivedColumn.flags}
-              holdTaskIds={holdTaskIds}
-              workflowContextMenuColumns={selectedWorkflowContextMenuColumns}
-              tasks={selectedWorkflowTasksByColumn[selectedWorkflowArchivedColumn.id] ?? []}
-              allTasks={selectedWorkflowTasks}
-              projectId={projectId}
-              maxConcurrent={maxConcurrent}
-              maxWorktrees={maxWorktrees}
-              showWorktreeGrouping={showWorktreeGrouping}
-              onMoveTask={onMoveTask}
-              onPauseTask={onPauseTask}
-              onUnpauseTask={onUnpauseTask}
-                  onResetTask={onResetTask}
-              onDuplicateTask={onDuplicateTask}
-              onMergeTask={onMergeTask}
-              onOpenDetail={onOpenDetail}
-              onPlanningMode={onPlanningMode}
-              onOpenRefine={onOpenRefine}
-              onOpenGroupModal={onOpenGroupModal}
-              addToast={addToast}
-              globalPaused={globalPaused}
-              onUpdateTask={onUpdateTask}
-              onRetryTask={onRetryTask}
-              onOpenChatWithPrefill={onOpenChatWithPrefill}
-              onArchiveTask={onArchiveTask}
-              onUnarchiveTask={onUnarchiveTask}
-              onRevertTask={onRevertTask}
-              onReviseTask={onReviseTask}
-              onDeleteTask={onDeleteTask}
-              availableModels={availableModels}
-              onOpenDetailWithTab={onOpenDetailWithTab}
-              favoriteProviders={favoriteProviders}
-              favoriteModels={favoriteModels}
-              onToggleFavorite={onToggleFavorite}
-              onToggleModelFavorite={onToggleModelFavorite}
-              isSearchActive={isSearchActive}
-              onOpenMission={onOpenMission}
-              lastFetchTimeMs={lastFetchTimeMs}
-              taskCardFieldDefs={taskCardFieldDefs}
-              blockerFanoutMap={blockerFanoutMap}
-              prAuthAvailable={prAuthAvailable}
-              autoMerge={autoMerge}
-              mergeStrategy={mergeStrategy}
-              sortMode={archivedSortMode ?? "completion-date-desc"}
-              onSortModeChange={onArchivedSortModeChange}
-              doneSortMode={archivedSortMode ?? "completion-date-desc"}
-              onDoneSortModeChange={onArchivedSortModeChange}
-              collapsed={archivedCollapsed}
-              onToggleCollapse={handleToggleArchivedCollapse}
-              archivedHasMore={archivedHasMore}
-              archivedLoadingMore={archivedLoadingMore}
-              onLoadMoreArchived={onLoadMoreArchivedTasks}
-            />
-          )}
         </main>
       </div>
     );

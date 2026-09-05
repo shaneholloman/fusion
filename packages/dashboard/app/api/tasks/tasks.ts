@@ -30,46 +30,36 @@ export interface DeleteTaskOptions {
   allowResurrection?: boolean;
 }
 
-export interface ArchiveTaskOptions {
-  removeLineageReferences?: boolean;
-}
-
 export function fetchTasks(
   limit?: number,
   offset?: number,
   projectId?: string,
   q?: string,
-  includeArchived?: boolean,
+  excludeDone?: boolean,
 ): Promise<Task[]> {
   const search = new URLSearchParams();
   if (limit !== undefined) search.set("limit", String(limit));
   if (offset !== undefined) search.set("offset", String(offset));
   if (projectId) search.set("projectId", projectId);
   if (q) search.set("q", q);
-  if (includeArchived) search.set("includeArchived", "1");
+  if (excludeDone) search.set("excludeDone", "1");
   const suffix = search.size > 0 ? `?${search.toString()}` : "";
   return api<Task[]>(`/tasks${suffix}`);
 }
 
-/**
- * FNXC:ArchivePagination 2026-07-08-00:00:
- * Dedicated paged read for the Archived board column (FN-7659). Returns
- * one bounded page (default 100) ordered `archivedAt DESC` plus `total`/
- * `hasMore` so the caller can drive a "Show more" affordance without ever
- * fetching the whole archive in one request.
- */
-export function fetchArchivedTasks(
+/** One bounded, newest-first page from the workflow-defined completion lanes. */
+export function fetchCompletedTasks(
   projectId?: string,
   limit?: number,
   offset?: number,
-  sortMode: TaskColumnSortMode = "completion-date-desc",
+  sortMode?: TaskColumnSortMode,
 ): Promise<{ tasks: Task[]; total: number; hasMore: boolean }> {
   const search = new URLSearchParams();
   if (limit !== undefined) search.set("limit", String(limit));
   if (offset !== undefined) search.set("offset", String(offset));
-  search.set("sort", sortMode);
+  if (sortMode !== undefined) search.set("sort", sortMode);
   const suffix = search.size > 0 ? `?${search.toString()}` : "";
-  return api<{ tasks: Task[]; total: number; hasMore: boolean }>(withProjectId(`/tasks/archived${suffix}`, projectId));
+  return api<{ tasks: Task[]; total: number; hasMore: boolean }>(withProjectId(`/tasks/done${suffix}`, projectId));
 }
 
 /** Row-paginated recommendation aggregate returned by the Insights triage route. */

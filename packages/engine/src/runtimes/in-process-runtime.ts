@@ -21,7 +21,6 @@ import type {
 } from "@fusion/core";
 import {
   AsyncCentralClaimStore,
-  bulkDeleteStashChatSessions,
   ChatStore,
   isEphemeralAgent,
   isPlanReviewSatisfied,
@@ -86,8 +85,6 @@ inline comparison whether or not it sits in a fallback branch (its `traitFallbac
 and never changes `kind`), so a correctly-converted guard with an inline legacy arm stays on the
 backlog permanently and the number stops distinguishing real debt from documented degraded answers.
 */
-const LEGACY_ARCHIVE_LANES: readonly string[] = ["archived"];
-
 
 const yieldEventLoop = (): Promise<void> => new Promise((resolve) => setImmediateCb(resolve));
 
@@ -125,7 +122,6 @@ export function createRuntimePluginMcpProviderOptions(input: {
 }
 
 export const CLI_AGENT_AWAITING_INPUT_EVENT = "cli-agent-awaiting-input" as const;
-const TASK_PLANNER_CHAT_AGENT_ID_PREFIX = "task-planner:";
 
 export interface PlanningContinuationCandidate {
   item: WorkflowWorkItem;
@@ -135,24 +131,16 @@ export interface PlanningContinuationCandidate {
 /**
  * FNXC:WorkflowScheduling 2026-07-21-22:31:
  * A planning continuation is only dispatchable when its live task can still
- * enter plan-review. Soft-deleted, archived, and done cards must be treated as
+ * enter plan-review. Soft-deleted and completed cards must be treated as
  * non-dispatchable so their orphaned work items can be cancelled instead of
  * blocking later due rows (FN-8470 tombstone starved FN-8471 plan-review).
  */
 /*
 FNXC:WorkflowLifecycleColumns 2026-08-02-15:10 (fleet: the planning-continuation drain):
-THE TERMINAL PAIR ARRIVES FROM THE CALLER, matching this file's OWN injection idiom — the
-specification-complete reaction already takes a `resolveIr` dependency for exactly this reason (the
-classifiers are exported so they can be tested without constructing a runtime, which would attach to the real
-project registry).
+The terminal columns arrive from the caller so renamed workflow completion lanes cancel orphaned planning work instead of starving the FIFO drain.
 
-These two classifiers decide whether a due planning work item is DISPATCHABLE or an ORPHAN to cancel. Spelled
-as the default lineage's ids, a renamed board answered "not terminal" for every finished card — so an
-archived or completed card's orphaned work item was treated as live and, per FN-8470's own note, ONE orphan
-earlier in created_at FIFO prevented every later planning continuation from dispatching. The failure is not
-local: one stale item starves the whole drain.
-
-Optional and defaulting to the legacy pair, so every existing caller and test is unchanged.
+FNXC:TaskArchiveRemoval 2026-09-04-14:51:
+Done is the only built-in completion fallback. Historical `archived` snapshots are identified by `deletedAt` and must not make the removed archive lane a live terminal role again.
 */
 export function isPlanningContinuationTaskDispatchable(
   task: Task | null | undefined,
@@ -161,13 +149,13 @@ export function isPlanningContinuationTaskDispatchable(
   if (task == null) return false;
   if (task.paused === true || task.userPaused === true) return false;
   if (task.deletedAt) return false;
-  const terminal = terminalColumns ?? LEGACY_TERMINAL_PAIR;
+  const terminal = terminalColumns ?? LEGACY_TERMINAL_COLUMNS;
   if (terminal.has(task.column)) return false;
   return true;
 }
 
-/** The terminal ids from before workflows owned the vocabulary; the fallback when no set is supplied. */
-const LEGACY_TERMINAL_PAIR: ReadonlySet<string> = new Set(["done", "archived"]);
+/** The built-in completion id used when workflow metadata is unavailable. */
+const LEGACY_TERMINAL_COLUMNS: ReadonlySet<string> = new Set(["done"]);
 
 /** Outcome of resolving one due work item for the planning-continuation drain. */
 export type PlanningContinuationResolution =
@@ -198,7 +186,7 @@ export function resolvePlanningContinuationCandidate(
   if (opts?.taskLookupFailed === true || task == null) {
     return { kind: "orphan", item, reason: "task-not-found" };
   }
-  const terminal = opts?.terminalColumns ?? LEGACY_TERMINAL_PAIR;
+  const terminal = opts?.terminalColumns ?? LEGACY_TERMINAL_COLUMNS;
   if (task.deletedAt || terminal.has(task.column)) {
     return { kind: "orphan", item, reason: "task-terminal" };
   }
@@ -248,12 +236,12 @@ export function resolvePlanningContinuationCandidate(
   FNXC:WorkflowResolvedColumns 2026-07-30-01:40 (the partially-threaded conversion named by
   workflow-planning-continuation-terminal-gap-live-e2e.pg.test.ts):
   THREAD THE SET THIS FUNCTION ALREADY RESOLVED. The terminal test at the top of this function uses the
-  caller's `terminal`; this delegation then re-tested against `LEGACY_TERMINAL_PAIR`, so the conversion
+  caller's `terminal`; this delegation then re-tested against `LEGACY_TERMINAL_COLUMNS`, so the conversion
   was whole at the call site and not whole inside it.
 
   The reachable case is narrow but real: a board that DECLARES `done` as a non-terminal column id. The
   outer check passes (not terminal per the resolved set), then the inner predicate calls it terminal per
-  the legacy pair and the continuation is skipped as "paused" — a card stalled by a lane name.
+  the fallback set and the continuation is skipped as "paused" — a card stalled by a lane name.
 
   A partially threaded conversion is indistinguishable from a complete one at every call site that looks
   converted, which is why this is worth closing even though the outer check dominates the common case.
@@ -496,7 +484,7 @@ export async function reactToSpecificationComplete(
 export interface DuePlanningContinuationDrainDeps {
   listDue: () => Promise<WorkflowWorkItem[]>;
   getTask: (taskId: string) => Promise<Task | undefined>;
-  /** The task's own terminal columns; omitted in tests and legacy callers, which keep the legacy pair. */
+  /** The task's own terminal columns; omitted callers use the built-in Done fallback. */
   resolveTerminalColumns?: (taskId: string) => Promise<ReadonlySet<string>>;
   cancelOrphan: (
     item: WorkflowWorkItem,
@@ -2798,16 +2786,13 @@ export class InProcessRuntime
         }),
         getTask: (taskId) => Promise.resolve(this.taskStore.getTask(taskId)),
         /* FNXC:WorkflowLifecycleColumns 2026-08-02-15:20 (fleet): the PRODUCTION resolver for the drain's
-           terminal check — the pure pass keeps the legacy pair when this is omitted, which is what every
-           existing test relies on. One IR read per due item, and the batch is capped by
+           terminal check — the pure pass keeps the built-in Done fallback when this is omitted. One IR read per due item, and the batch is capped by
            DUE_PLANNING_CONTINUATION_BATCH_LIMIT. */
         resolveTerminalColumns: async (taskId) => {
           const lifecycle = await resolveTaskLifecycleColumns(this.taskStore, taskId);
           return new Set([
             lifecycle?.complete ?? "done",
-            lifecycle?.archived ?? "archived",
             "done",
-            "archived",
           ]);
         },
         cancelOrphan: (item, reason) => this.cancelOrphanedWorkflowWorkItem(item, reason),
@@ -2962,87 +2947,6 @@ export class InProcessRuntime
     // Forward task:moved events
     this.taskStore.on("task:moved", (data: { task: Task; from: string; to: string }) => {
       this.recordActivity();
-      /*
-      FNXC:TaskDetailPlannerChatRetention 2026-06-30-18:45:
-      In-process task archival is the retention cutoff for task-local planner chats. Keep interacted planner chats when tasks reach done, but delete exact task-planner sessions on archive through ChatStore so normal conversations and other tasks remain untouched.
-
-      FNXC:WorkflowLifecycleColumns 2026-08-02-15:50 (fleet):
-      ARCHIVAL IS THE CUTOFF, and on a renamed board the literal never matched — so task-planner chats were
-      never deleted on archive. That is the quiet direction of this defect class: nothing breaks, data that
-      should have been cleaned up simply accumulates, and the only symptom is storage growth nobody attributes
-      to a column name.
-
-      The resolution is async and this is a sync event handler, so the branch moves inside a `void (async …)`
-      — the deletion was already fire-and-forget (`void this.chatStore?.…`), so nothing about the handler's
-      timing contract changes. `data.to` is still accepted when it equals the legacy `archived`, because a row
-      moved into a column the workflow no longer declares is still archived.
-      */
-      void (async () => {
-        const archivedLifecycle = await resolveTaskLifecycleColumns(this.taskStore, data.task.id)
-          .catch(() => undefined);
-        const archivedColumn = archivedLifecycle?.archived ?? "archived";
-        /* Resolved archive lane UNION the legacy id — the guard already accepted either. */
-        const archivedLanes = new Set<string>([archivedColumn, ...LEGACY_ARCHIVE_LANES]);
-        if (!archivedLanes.has(data.to)) return;
-        const plannerAgentId = `${TASK_PLANNER_CHAT_AGENT_ID_PREFIX}${data.task.id}`;
-        try {
-          /*
-          FNXC:RUFU125BulkArchiveSync 2026-08-19-06:07:
-          RUFU-125: snapshot the doomed local session ids BEFORE the local bulk delete, scoped to
-          this runtime's project. The read is fail-open: a listSessions failure degrades to an
-          empty list and must never prevent the local delete below. chatStore optional — an
-          undefined chatStore means no chat calls at all (pre-RUFU-125 behavior preserved).
-          */
-          const doomed = (await this.chatStore?.listSessions({
-            agentId: plannerAgentId,
-            projectId: this.config.projectId,
-          }).catch(() => [])) ?? [];
-          const deletedCount = await this.chatStore?.deleteSessionsForAgentId(plannerAgentId, {
-            projectId: this.config.projectId,
-          });
-          if ((deletedCount ?? 0) === 0 || doomed.length === 0) return;
-          /*
-          FNXC:RUFU125BulkArchiveSync 2026-08-19-06:07:
-          RUFU-125: the bulk local delete above bypasses the per-session DELETE route RUFU-121
-          hooks, so soft-delete the matching Stash rows in a SEPARATE fire-and-forget IIFE — a
-          Stash stall can never delay local archival bookkeeping, and the forwarded task:moved
-          runtime event (emitted after this chain is SCHEDULED, below) is unaffected either way.
-          Mirrors the RUFU-121 route sync (skip-guards, url fallback, never-throws): a skip is
-          debug-logged with its reason, and a partial window match (matched < doomed.length) is
-          debug-logged as a window miss with matched/total + truncated (the bounded lookback's
-          documented residual — rows older than 10 × 200 recent rows remain in Stash).
-          */
-          void (async () => {
-            try {
-              const summary = await bulkDeleteStashChatSessions(this.taskStore, doomed.map((s) => s.id));
-              if (summary.skipped) {
-                runtimeLog.debug(
-                  `[RUFU-125] stash bulk sync skipped on archive task=${data.task.id} reason=${summary.skipReason}`,
-                );
-                return;
-              }
-              if (summary.result.matched < doomed.length) {
-                const r = summary.result;
-                runtimeLog.debug(
-                  `[RUFU-125] stash bulk sync window miss task=${data.task.id} matched=${r.matched}/${doomed.length} deleted=${r.deleted} truncated=${r.truncated} pagesScanned=${r.pagesScanned}`,
-                );
-              }
-            } catch (err: unknown) {
-              // bulkDeleteStashChatSessions never throws by core contract; this is the
-              // never-reject safety net for any future regression.
-              runtimeLog.warn(
-                `[RUFU-125] stash bulk sync failed task=${data.task.id} (best-effort, non-blocking): ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
-          })();
-        } catch (err: unknown) {
-          // Unexpected failure in the archival chain (e.g. the local delete throwing):
-          // warn, never reject the task:moved chain.
-          runtimeLog.warn(
-            `[RUFU-125] archive chat cleanup failed task=${data.task.id} (non-blocking): ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      })();
       this.emit("task:moved", data);
     });
 

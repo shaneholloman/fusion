@@ -81,22 +81,15 @@ pgTest("mission validation repair", () => {
     expect((await store.getMissionEvents(mission.id, { limit: 20 })).events.find((event) => event.eventType === "feature_validation_repaired")).toBeUndefined();
   });
 
-  it("clears archived and missing linked tasks as absent ground truth", async () => {
+  it("clears soft-deleted linked tasks as absent ground truth", async () => {
     const { store, feature } = await blockedFeature();
-    const archived = await h.store().createTask({ description: "archived repair target", column: "done" });
-    await h.store().archiveTask(archived.id, { cleanup: false });
-    const archivedFeature = await store.updateFeature(feature.id, { taskId: archived.id });
-    const absentFence = (taskId: string) => ({
-      featureId: archivedFeature.id, taskId, taskLiveness: "absent" as const,
-      taskColumn: null, taskUpdatedAt: null, laneRole: "none" as const, resolvedAt: new Date().toISOString(),
-    });
-    await expect(store.repairFeatureValidationState(archivedFeature.id, {
-      action: "clear", actor: { type: "agent", id: "agent", source: "test" }, resolvedStatus: "defined", groundTruth: absentFence(archived.id),
-    })).resolves.toMatchObject({ feature: { status: "defined", loopState: "idle" } });
-
     const deleted = await h.store().createTask({ description: "deleted repair target", column: "done" });
     await h.store().deleteTask(deleted.id);
-    const deletedFeature = await store.updateFeature(archivedFeature.id, { status: "blocked", loopState: "blocked", taskId: deleted.id });
+    const deletedFeature = await store.updateFeature(feature.id, { taskId: deleted.id });
+    const absentFence = (taskId: string) => ({
+      featureId: deletedFeature.id, taskId, taskLiveness: "absent" as const,
+      taskColumn: null, taskUpdatedAt: null, laneRole: "none" as const, resolvedAt: new Date().toISOString(),
+    });
     await expect(store.repairFeatureValidationState(deletedFeature.id, {
       action: "clear", actor: { type: "agent", id: "agent", source: "test" }, resolvedStatus: "defined", groundTruth: absentFence(deleted.id),
     })).resolves.toMatchObject({ feature: { status: "defined", loopState: "idle" } });

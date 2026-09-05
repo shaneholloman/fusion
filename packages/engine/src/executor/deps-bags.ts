@@ -1522,14 +1522,6 @@ export function buildDisposeStoreLifecycleDisposersDeps(host: any): any {
       host.unregisterTaskMoveDisposer?.();
       host.unregisterTaskMoveDisposer = undefined;
     },
-    clearArchiveWorktreeDisposer: () => {
-      host.unregisterArchiveWorktreeDisposer?.();
-      host.unregisterArchiveWorktreeDisposer = undefined;
-    },
-    clearArchiveWorkspaceWorktreeDisposer: () => {
-      host.unregisterArchiveWorkspaceWorktreeDisposer?.();
-      host.unregisterArchiveWorkspaceWorktreeDisposer = undefined;
-    },
   };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */

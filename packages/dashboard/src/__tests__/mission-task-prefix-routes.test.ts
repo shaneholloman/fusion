@@ -267,7 +267,7 @@ describe("mission taskPrefix routes", () => {
 /*
 FNXC:MissionValidationRepair 2026-08-11-01:46:
 Exercise the real dashboard router, engine fence resolver, and PostgreSQL mission store together.
-Forwarding mocks cannot demonstrate that an archived link clears or that the route's one retry
+Forwarding mocks cannot demonstrate that a deleted link clears or that the route's one retry
 re-resolves a genuine task race before writing.
 */
 pgDescribe("mission validation repair routes", () => {
@@ -296,10 +296,9 @@ pgDescribe("mission validation repair routes", () => {
     return missionStore.updateFeature(feature.id, { taskId, status: "blocked", loopState: "blocked" });
   }
 
-  it("clears a physically archived link retained in a nonliteral column through the production route", async () => {
-    /* FNXC:MissionValidationRepair 2026-08-11-02:05: Archive preserves the task's prior `done` column in retained storage while marking it deleted, proving the fence does not depend on the literal archived column. */
-    const task = await h.store().createTask({ description: "Archived route delivery", column: "done" });
-    await h.store().archiveTask(task.id, { cleanup: false });
+  it("clears a soft-deleted link through the production route", async () => {
+    const task = await h.store().createTask({ description: "Deleted route delivery", column: "done" });
+    await h.store().deleteTask(task.id);
     const feature = await blockedFeature(task.id);
 
     const response = await request(app(), "POST", `/api/missions/features/${feature.id}/repair-validation`, JSON.stringify({ action: "clear" }), { "content-type": "application/json" });

@@ -55,7 +55,6 @@ export type TaskMenuItemDescriptor = TaskMenuActionDescriptor | TaskMenuSubmenuD
 
 export interface TaskContextMenuColumnFlags {
   complete?: boolean;
-  archived?: boolean;
   hiddenFromBoard?: boolean;
   hold?: boolean;
   intake?: boolean;
@@ -159,21 +158,21 @@ reasoning as `isReviewColumn` above — and the same flagged inversion: `column 
 unconditional disjunct ahead of the trait read.
 */
 function isDoneOrReview(column: string, flags?: TaskContextMenuColumnFlags): boolean {
-  return column === "done" || isReviewColumn(column, flags) || (flags?.complete === true && flags?.archived !== true);
+  return column === "done" || isReviewColumn(column, flags) || flags?.complete === true;
 }
 
 /*
 FNXC:TaskContextMenu 2026-07-30-04:10 DELIBERATE-LITERAL: the no-metadata fallback only.
 Same rule as `isReviewColumn` above: reached when no resolved flags arrive, where answering
-"mutable" for a done/archived card would offer live-work actions on a terminal one.
+"mutable" for a Done card would offer live-work actions on a terminal row.
 */
 function isMutableLiveColumn(column: string, flags?: TaskContextMenuColumnFlags): boolean {
-  if (flags) return flags.complete !== true && flags.archived !== true;
-  return column !== "done" && column !== "archived";
+  if (flags) return flags.complete !== true;
+  return column !== "done";
 }
 
 export function isPreExecutionHoldColumn(column: string, flags?: TaskContextMenuColumnFlags): boolean {
-  if (flags?.complete === true || flags?.archived === true) return false;
+  if (flags?.complete === true) return false;
   /*
   FNXC:WorkflowResolvedColumns 2026-07-30-18:35 (Phase B — AUDITED, deliberately NOT consolidated):
   `isPreImplementationColumnRole` in `utils/columnRoles.ts` answers a near-identical question and I
@@ -302,7 +301,7 @@ export function buildTaskActionMenuModel(options: BuildTaskActionMenuModelOption
   /*
   FNXC:WorkflowResolvedColumns 2026-07-30-23:50 (batch-dashboard-app):
   REVIEW role, resolved from `currentColumnFlags` — which this function already receives and already
-  uses for the archived check ~15 lines up. Keyed on the literal, the "Bypass failed review" action
+  uses for other role checks. Keyed on the literal, the "Bypass failed review" action
   never appeared on a renamed board, so an operator with a genuinely failed pre-merge review step had
   no way to clear it from the menu and the card stayed merge-blocked with no affordance.
   */

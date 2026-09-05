@@ -29,10 +29,11 @@
  *   PostgreSQL integration tests consume. They program against the stable
  *   `AsyncDataLayer` interface (U4), not the underlying driver.
  */
-import { and, Column, eq, is, isNull, sql, type SQL } from "drizzle-orm";
+import { and, Column, desc, eq, inArray, is, isNull, notInArray, sql, type SQL } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import * as schema from "../../postgres/schema/index.js";
 import type { AsyncDataLayer, DbTransaction } from "../../postgres/data-layer.js";
+import type { TaskColumnSortMode } from "../../tasks/task-priority.js";
 import { isPostgresUniqueError } from "../../db/postgres-errors.js";
 import { taskProjectScope } from "../../postgres/data-layer.js";
 import {
@@ -188,10 +189,10 @@ export async function softDeleteTaskRow(
     .update(schema.project.tasks)
     .set({
       /*
-      FNXC:TaskStorePersistence 2026-08-01-23:23 DELIBERATE-LITERAL — STATE MARKER:
-      Soft deletion persists the physical archive marker together with `deletedAt`; it is not a
-      workflow archive-lane move. Resolving a custom archived lane here would make a deleted row
-      disagree with `getLiveTaskColumn`'s storage sentinel and violate forensic visibility.
+      FNXC:TaskArchiveRemoval 2026-09-04-18:25 DELIBERATE-LITERAL:
+      Soft deletion persists the historical `archived` sentinel together with `deletedAt`; it is
+      not a workflow move. Task workflows expose no archive role, and forensic readers depend on
+      this stable sentinel.
       */
       column: "archived",
       deletedAt,
@@ -248,7 +249,7 @@ export async function resolveActiveTaskWedgeEpisodeRow(
  * FNXC:TaskStoreArchiveLineage 2026-06-24-15:00:
  * Soft-delete a task INSIDE a shared transaction handle. This is the
  * transaction-aware variant of {@link softDeleteTaskRow} for composite
- * operations (archiveParentTaskWithLineageGate, restoreTaskFromArchive)
+ * migration/deletion operations such as `restoreTaskFromArchive`
  * that must commit the soft-delete atomically with sibling writes.
  *
  * HAZARD FIX (runtime-workflow-async): the previous composite functions
@@ -342,7 +343,7 @@ export async function readTaskRow(
  * FNXC:TaskStoreArchiveLineage 2026-06-24-15:05:
  * Read a single task row by id INSIDE a shared transaction handle. This is
  * the transaction-aware variant of {@link readTaskRow} for composite
- * operations (restoreTaskFromArchive) that must read within the same
+ * migration restoration operations that must read within the same
  * transaction as their sibling writes for a consistent snapshot.
  *
  * HAZARD FIX (runtime-workflow-async): the previous restoreTaskFromArchive
@@ -431,12 +432,24 @@ export async function readTaskRowInTransaction(
  * @param layer The async data layer.
  * @param options Optional: excludeLog drops the `log` jsonb column;
  *   includeDeleted surfaces soft-deleted rows for forensic reads (VAL-DATA-006);
- *   column/excludeColumn filter by board column in SQL; limit/offset paginate
- *   in SQL (ordered by createdAt then numeric id suffix).
+ *   column/columns and excludeColumn/excludeColumns filter by board column in SQL;
+ *   limit/offset paginate in SQL.
  */
+export interface ReadLiveTaskRowsOptions {
+  excludeLog?: boolean;
+  includeDeleted?: boolean;
+  column?: string;
+  columns?: readonly string[];
+  excludeColumn?: string;
+  excludeColumns?: readonly string[];
+  limit?: number;
+  offset?: number;
+  sort?: "created-asc" | "completion-desc" | TaskColumnSortMode;
+}
+
 export async function readLiveTaskRows(
   layer: AsyncDataLayer,
-  options?: { excludeLog?: boolean; includeDeleted?: boolean; column?: string; excludeColumn?: string; limit?: number; offset?: number },
+  options?: ReadLiveTaskRowsOptions,
 ): Promise<Record<string, unknown>[]> {
   // FNXC:TaskStoreForensicRead 2026-06-26-15:20:
   // VAL-DATA-006 — Forensic reads surface soft-deleted rows when explicitly
@@ -462,11 +475,16 @@ export async function readLiveTaskRows(
   (limit/offset) the query orders by (created_at, numeric id suffix) — the same
   comparator the JS sort uses — so the SQL page is exactly the JS page.
   */
+  if (options?.columns?.length === 0) return [];
   const columnScope = options?.column !== undefined
     ? eq(schema.project.tasks.column, options.column)
-    : options?.excludeColumn !== undefined
-      ? sql`${schema.project.tasks.column} IS DISTINCT FROM ${options.excludeColumn}`
-      : undefined;
+    : options?.columns !== undefined
+      ? inArray(schema.project.tasks.column, [...options.columns])
+      : options?.excludeColumn !== undefined
+        ? sql`${schema.project.tasks.column} IS DISTINCT FROM ${options.excludeColumn}`
+        : options?.excludeColumns?.length
+          ? notInArray(schema.project.tasks.column, [...options.excludeColumns])
+          : undefined;
   const liveFilter = options?.includeDeleted
     ? and(projectScope, columnScope)
     : and(ACTIVE_TASK_FILTER, projectScope, columnScope);
@@ -474,10 +492,23 @@ export async function readLiveTaskRows(
   // Mirrors the JS comparator: createdAt ASC, then the numeric suffix of the
   // task id ("FN-12" → 12; no trailing digits → 0). substring() returns NULL
   // (→ 0) instead of throwing on ids without a numeric suffix.
-  const createdAtIdOrder = [
-    sql`${schema.project.tasks.createdAt} ASC`,
-    sql`COALESCE(substring(${schema.project.tasks.id} from '-([0-9]+)$')::int, 0) ASC`,
-  ];
+  /*
+  FNXC:DonePagination 2026-09-04-10:36:
+  Completed-task pages are selected by the latest terminal-lane entry before LIMIT/OFFSET. The deterministic id tie-break prevents gaps or duplicates while operators walk a large Done history.
+  */
+  const numericTaskSuffix = sql`COALESCE(substring(${schema.project.tasks.id} from '-([0-9]+)$')::numeric, 0)`;
+  const createdAtIdOrder = options?.sort === "task-id-desc"
+    ? [desc(numericTaskSuffix), desc(schema.project.tasks.id)]
+    : options?.sort === "completion-desc" || options?.sort === "completion-date-desc"
+      ? [
+          desc(sql`COALESCE(${schema.project.tasks.columnMovedAt}, ${schema.project.tasks.updatedAt}, ${schema.project.tasks.createdAt})`),
+          desc(numericTaskSuffix),
+          desc(schema.project.tasks.id),
+        ]
+      : [
+          sql`${schema.project.tasks.createdAt} ASC`,
+          sql`${numericTaskSuffix} ASC`,
+        ];
   const applyPagination = <Q extends { orderBy: (...o: SQL[]) => Q; limit: (n: number) => Q; offset: (n: number) => Q }>(query: Q): Q => {
     if (!paginate) return query;
     let q = query.orderBy(...createdAtIdOrder);
@@ -509,12 +540,21 @@ export async function readLiveTaskRows(
  * Count live (non-soft-deleted) tasks. Soft-deleted rows are excluded so the
  * board count never includes tombstoned tasks (VAL-DATA-005).
  */
-export async function countLiveTasks(layer: AsyncDataLayer): Promise<number> {
+export async function countLiveTasks(
+  layer: AsyncDataLayer,
+  options?: { columns?: readonly string[]; excludeColumns?: readonly string[] },
+): Promise<number> {
+  if (options?.columns?.length === 0) return 0;
+  const columnScope = options?.columns !== undefined
+    ? inArray(schema.project.tasks.column, [...options.columns])
+    : options?.excludeColumns?.length
+      ? notInArray(schema.project.tasks.column, [...options.excludeColumns])
+      : undefined;
   // FNXC:MultiProjectIsolation 2026-07-10: scope live counts to the bound project.
   const rows = await layer.db
     .select({ count: sql<number>`count(*)::int` })
     .from(schema.project.tasks)
-    .where(and(ACTIVE_TASK_FILTER, taskProjectScope(layer)));
+    .where(and(ACTIVE_TASK_FILTER, taskProjectScope(layer), columnScope));
   return rows[0]?.count ?? 0;
 }
 

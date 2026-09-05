@@ -143,7 +143,6 @@ pgDescribe("refineTask / duplicateTask backend mode (PostgreSQL)", () => {
             */
             { id: "working", name: "Working", traits: [{ trait: "wip", config: { limitSetting: "maxConcurrent" } }] },
             { id: "shipped", name: "Shipped", traits: [{ trait: "complete" }] },
-            { id: "filed", name: "Filed", traits: [{ trait: "archived" }] },
           ],
           nodes: [
             { id: "start", kind: "start", column: "capture" },
@@ -515,14 +514,14 @@ pgDescribe("refineTask / duplicateTask backend mode (PostgreSQL)", () => {
     const h = await makeHarness();
     try {
       const source = await h.store.createTask({ description: "Do not duplicate onto a retired workflow" });
-      const beforeIds = (await h.store.listTasks({ includeArchived: true })).map((task) => task.id);
+      const beforeIds = (await h.store.listTasks({ includeArchived: false })).map((task) => task.id);
 
       await expect(h.store.duplicateTask(source.id, { workflowId: "WF-UNKNOWN" })).rejects.toMatchObject({
         name: "DuplicateWorkflowSelectionError",
         requestedWorkflowId: "WF-UNKNOWN",
       });
 
-      expect((await h.store.listTasks({ includeArchived: true })).map((task) => task.id)).toEqual(beforeIds);
+      expect((await h.store.listTasks({ includeArchived: false })).map((task) => task.id)).toEqual(beforeIds);
     } finally {
       await teardown();
     }

@@ -71,11 +71,7 @@ describe("triage explicit duplicate marker short-circuit", () => {
         runId: expect.stringMatching(/^triage-delete-FN-002-/),
       }),
     }));
-    expect(store.recordActivity).toHaveBeenCalledWith(expect.objectContaining({
-      type: "task:auto-archived-duplicate",
-      taskId: "FN-002",
-      metadata: expect.objectContaining({ canonicalTaskId: "FN-001", source: "explicit-marker" }),
-    }));
+    expect(store.recordActivity).not.toHaveBeenCalled();
   });
 
 
@@ -249,7 +245,6 @@ describe("triage explicit duplicate marker short-circuit", () => {
     ["missing", null],
     ["soft-deleted", createTask({ id: "FN-001", deletedAt: new Date().toISOString() })],
     ["done", createTask({ id: "FN-001", column: "done" })],
-    ["archived", createTask({ id: "FN-001", column: "archived" })],
   ])("clears an inactive %s canonical marker instead of pausing for a hidden decision", async (_state, canonical) => {
     const task = createTask();
     const store = createMockStore({

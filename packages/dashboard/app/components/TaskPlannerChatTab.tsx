@@ -535,8 +535,8 @@ export function TaskPlannerChatTab({ task, columnFlags, projectId, active, expan
    * FNXC:TaskPlannerChatSlashCommands 2026-07-08-00:00:
    * /steer is only dispatchable when this task's bound agent is actively
    * running (task.column === "in-progress"), mirroring how TaskChatTab gates
-   * its own done-task affordance on task.column. Any other state (todo,
-   * in-review, done, archived, triage) shows the command in the menu but
+   * its own completed-task affordance on task.column. Any non-WIP state, including
+   * intake, hold, review, and Complete, shows the command in the menu but
    * disabled with a hint instead of hiding it outright, and dispatch itself
    * is refused with the same hint rather than silently sending plain chat.
    */

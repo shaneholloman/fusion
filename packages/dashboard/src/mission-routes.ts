@@ -2980,7 +2980,7 @@ export function createMissionRouter(
 
       /*
       FNXC:MissionReconciliation 2026-07-20-08:34:
-      Route validation stays project-scoped, but all terminal-evidence checks, mismatch guards, linkage, and rollups belong to one store transaction. Never pre-link or move/unarchive a shipped task here because those ordinary lifecycle paths can wake a parked mission.
+      Route validation stays project-scoped, but all terminal-evidence checks, mismatch guards, linkage, and rollups belong to one store transaction. Never pre-link or move a shipped task here because ordinary lifecycle paths can wake a parked mission.
       */
       try {
         const feature = await scopedMissionStore.reconcileFeatureDoneWithTerminalTask(featureId, normalizedTaskId);

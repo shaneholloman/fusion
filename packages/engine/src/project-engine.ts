@@ -1149,7 +1149,7 @@ export class ProjectEngine {
     store.on("task:moved", this.specDriftTaskMutationHandler);
     /*
     FNXC:SpecDrift 2026-08-23-06:25:
-    Startup replay is live-task-only. Archived cards cannot act on drift, and
+    Startup replay is live-task-only. Deleted/historical cards cannot act on drift, and
     replaying them consumes planning-lock sessions during restart; unarchive emits
     task:updated, so a returning card still enters through the subscriptions above.
     */
@@ -3599,7 +3599,7 @@ export class ProjectEngine {
       }
 
       // Drop retained observations for tasks that have left the in-flight set
-      // (moved to done/archived/failed/etc.) so the ring buffers don't leak.
+      // (moved to Complete/failed/etc.) so the ring buffers don't leak.
       for (const taskId of overseer.getObservedTaskIds()) {
         if (!inFlightIds.has(taskId)) {
           overseer.clear(taskId);

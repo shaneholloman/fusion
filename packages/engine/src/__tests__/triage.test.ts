@@ -7539,7 +7539,7 @@ describe("FN-4774 regression: triage duplicate detection over done/archived task
   }
 
   // Regression: FN-4774 (FN-4827 recovery; supersedes FN-4815) — see docs/triage-duplicate-detection-postmortem.md
-  it("fn_task_search tool is registered with includeDone and includeArchived parameters", () => {
+  it("fn_task_search exposes the Done history opt-in without an Archived filter", () => {
     const store = createMockStore();
     const processor = new TriageProcessor(store as any, "/tmp/root");
 
@@ -7552,41 +7552,27 @@ describe("FN-4774 regression: triage duplicate detection over done/archived task
     expect(taskSearchTool).toBeDefined();
     expect(taskSearchTool.name).toBe("fn_task_search");
 
-    // Verify includeDone and includeArchived are present in the parameter schema
     const props = taskSearchTool.parameters.properties;
     expect(props).toHaveProperty("includeDone");
-    expect(props).toHaveProperty("includeArchived");
+    expect(props).not.toHaveProperty("includeArchived");
   });
 
   // Regression: FN-4774 (FN-4827 recovery; supersedes FN-4815) — see docs/triage-duplicate-detection-postmortem.md
-  it("canonical triage policy prompt guides agents to exclude done/archived duplicates", () => {
+  it("canonical triage policy prompt guides agents to exclude completed duplicates", () => {
     // Standard prompt mentions fn_task_search in duplicate-check guidance
     expect(TRIAGE_POLICY_PROMPT).toContain("fn_task_search");
     expect(TRIAGE_POLICY_PROMPT).toContain("includeDone: false");
-    expect(TRIAGE_POLICY_PROMPT).toContain("includeArchived: false");
-    // Duplicate-check section co-locates fn_task_search with done/archived references
-    expect(TRIAGE_POLICY_PROMPT).toContain("done");
-    expect(TRIAGE_POLICY_PROMPT).toContain("archived");
-    // Defensive regex: duplicate-check guidance must cross-reference fn_task_search with done/archived
-    expect(
-      /Duplicate check[\s\S]{0,600}fn_task_search[\s\S]{0,400}(done|archived)/i.test(
-        TRIAGE_POLICY_PROMPT,
-      ),
-    ).toBe(true);
+    expect(TRIAGE_POLICY_PROMPT).not.toContain("includeArchived");
+    expect(/Duplicate check[\s\S]{0,600}fn_task_search[\s\S]{0,400}(done|completed)/i.test(TRIAGE_POLICY_PROMPT)).toBe(true);
   });
 
   // Regression: FN-4774 (FN-4827 recovery; supersedes FN-4815) — see docs/triage-duplicate-detection-postmortem.md
-  it("FAST_PLANNING_PROMPT guides agents to exclude done/archived duplicates", () => {
+  it("FAST_PLANNING_PROMPT guides agents to exclude completed duplicates", () => {
     // Fast prompt mentions fn_task_search
     expect(FAST_PLANNING_PROMPT).toContain("fn_task_search");
     expect(FAST_PLANNING_PROMPT).toContain("includeDone: false");
-    expect(FAST_PLANNING_PROMPT).toContain("includeArchived: false");
-    // Defensive regex: duplicate-check guidance must cross-reference fn_task_search with done/archived
-    expect(
-      /Duplicate check[\s\S]{0,600}fn_task_search[\s\S]{0,400}(done|archived)/i.test(
-        FAST_PLANNING_PROMPT,
-      ),
-    ).toBe(true);
+    expect(FAST_PLANNING_PROMPT).not.toContain("includeArchived");
+    expect(/Duplicate check[\s\S]{0,600}fn_task_search[\s\S]{0,400}(done|completed)/i.test(FAST_PLANNING_PROMPT)).toBe(true);
   });
 
   // Regression: FN-4774 (FN-4827 recovery; supersedes FN-4815) — see docs/triage-duplicate-detection-postmortem.md

@@ -1305,10 +1305,10 @@ describe("TaskDetailModal", () => {
       expect(screen.getByRole("menuitem", { name: expectedLabel })).toBeTruthy();
     });
 
-    it.each(["done", "archived"])("hides Pause/Unpause button for %s tasks", async (column) => {
+    it.each(["done"])("hides Pause/Unpause button for %s tasks", async (column) => {
       render(
         <TaskDetailModal
-          task={makeTask({ column: column as "done" | "archived", paused: true, userPaused: true, assignedAgentId: "agent-1" })}
+          task={makeTask({ column: column as "done", paused: true, userPaused: true, assignedAgentId: "agent-1" })}
           initialTab="definition"
           onClose={noop}
           onDeleteTask={noopDelete}

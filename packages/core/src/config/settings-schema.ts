@@ -820,15 +820,7 @@ export const DEFAULT_PROJECT_SETTINGS = {
   // maxPostReviewFixes MOVED to workflow settings (U4).
   // Run maintenance (including WAL checkpointing) every 5 minutes by default.
   maintenanceIntervalMs: 300_000,
-  autoArchiveDoneTasksEnabled: true,
-  autoArchiveDoneAfterMs: 48 * 60 * 60 * 1000,
-  doneAutoArchiveDays: 0,
-  // FNXC:DuplicateIntake 2026-07-07-00:00 (FN-7658): default OFF — operators
-  // decide via the near-duplicate flag/UI instead of tasks silently vanishing
-  // into `archived` during intake. Set true to restore the pre-FN-7658 behavior.
-  autoArchiveDuplicateTasksEnabled: false,
   triageDuplicateResolution: "prompt",
-  archiveAgentLogMode: "compact",
   autoUpdatePrStatus: false,
   githubCommentOnDone: false,
   githubCommentTemplate: undefined,

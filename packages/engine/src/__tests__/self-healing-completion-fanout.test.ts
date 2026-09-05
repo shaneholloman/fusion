@@ -173,7 +173,7 @@ describe("self-healing completion fan-out", () => {
       blockedBy: completed.id,
       overlapBlockedBy: overlapHolder.id,
     });
-    const store = createStore([completed, overlapHolder, dependent]);
+    const store = createStore([completed, overlapHolder, dependent], { groupOverlappingFiles: true });
     (store as any).parseFileScopeFromPrompt = vi.fn(async () => ["packages/core/src/store.ts"]);
     const mgr = new SelfHealingManager(store, { rootDir: "/repo" });
 
@@ -204,7 +204,7 @@ describe("self-healing completion fan-out", () => {
       blockedBy: completed.id,
       overlapBlockedBy: overlapHolder.id,
     });
-    const store = createStore([completed, overlapHolder, dependent]);
+    const store = createStore([completed, overlapHolder, dependent], { groupOverlappingFiles: true });
     (store as any).parseFileScopeFromPrompt = vi.fn(async () => ["packages/core/src/store.ts"]);
     configureTaskWorkflowSelections(
       store,
@@ -358,7 +358,6 @@ describe("self-healing completion fan-out", () => {
 
     mgr.start();
     store.emit("task:moved", { task: t, from: "in-review", to: "done", source: "user" });
-    store.emit("task:moved", { task: t, from: "done", to: "archived", source: "engine" });
     store.emit("task:moved", { task: t, from: "in-review", to: "todo", source: "user" });
     /*
     FNXC:WorkflowResolvedColumns 2026-07-31-23:40:
@@ -366,9 +365,10 @@ describe("self-healing completion fan-out", () => {
     number of awaits inside a FIRE-AND-FORGET path. The listener does not await the fan-out and never
     did, so how many microtasks it takes is not the contract — "it ran, twice, for the right
     transitions" is. Resolving the lanes adds an await, so the drain is now written against the
-    invariant instead of against the old await count.
+    invariant instead of against the old await count. Only entry into Complete triggers fan-out;
+    historical sentinel movement is no longer a lifecycle event.
     */
-    await vi.waitFor(() => { expect(spy).toHaveBeenCalledTimes(2); });
+    await vi.waitFor(() => { expect(spy).toHaveBeenCalledOnce(); });
     expect(spy).toHaveBeenNthCalledWith(1, "FN-L", { worktreeHint: undefined });
 
     mgr.stop();
@@ -376,7 +376,7 @@ describe("self-healing completion fan-out", () => {
     /* The negative keeps a real drain: an unwired listener must stay silent after several ticks,
        not merely after one. */
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledOnce();
   });
 
   it("clears task.worktree and matching task.branch after successful removal", async () => {
@@ -418,7 +418,6 @@ describe("the task:moved fan-out resolves the board's own lanes", () => {
       { id: "building", name: "Building", traits: [{ trait: "wip", config: { limitSetting: "maxConcurrent" } }] },
       { id: "checking", name: "Checking", traits: [{ trait: "merge" }] },
       { id: "shipped", name: "Shipped", traits: [{ trait: "complete" }] },
-      { id: "filed", name: "Filed", traits: [{ trait: "archived" }] },
     ],
   };
 

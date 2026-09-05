@@ -95,8 +95,6 @@ import {
   resolveMcpServersForStore,
   resolveExecutorThinkingLevel,
   wrapToolsWithActionGate,
-  createTaskArchiveTool,
-  createTaskUnarchiveTool,
   createTaskDeleteTool,
   createTaskRetryTool,
   createTaskPauseTool,
@@ -733,8 +731,6 @@ export async function createChatFusionToolset(options: ChatFusionToolsetOptions)
     */
     if (actionGateContext) {
       tools.push(
-        createTaskArchiveTool(taskStore),
-        createTaskUnarchiveTool(taskStore),
         createTaskDeleteTool(taskStore),
         createTaskRetryTool(taskStore),
         createTaskPauseTool(taskStore),
@@ -868,8 +864,8 @@ function createTaskPlannerRefinementTool(taskStore: TaskStore, taskId: string) {
         const sourceTask = await taskStore.getTask(taskId);
         /*
         FNXC:WorkflowResolvedColumns 2026-07-30-05:05 (batch-core):
-        Refinement is for FINISHED work — complete only, not the landed set: an archived task is off
-        the board and is not a refinement source. Paired with the tool-registration guard in
+        Refinement is for workflow Complete work only. Deleted tasks are absent from the live task
+        model and are not refinement sources. Paired with the tool-registration guard in
         `createSession`; if only one of the two resolved, the tool would either be offered and then
         refuse, or be withheld from tasks it would have accepted. Both move together.
         */

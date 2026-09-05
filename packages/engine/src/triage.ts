@@ -328,7 +328,7 @@ import {
   resolveWorktreeDependencyReadiness,
   type WorktreeDependencyReadiness,
 } from "./worktree/worktree-dependency-install.js";
-import { archiveAsGhostBug } from "./self-healing.js";
+import { softDeleteAsGhostBug } from "./self-healing.js";
 import {
   TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
   buildInactiveDuplicateClearFeedback,
@@ -1819,9 +1819,6 @@ export class TriageProcessor {
       hasAdvancedPastPlanning(freshTask, plannerLanes.intake, {
         mergedPlanningColumn: plannerLanes.hold,
         lanes: plannerLanes,
-        archivedColumn: resolveLifecycleColumns(
-          await resolveWorkflowIrForTask(this.store, freshTask.id),
-        )?.archived,
       })
       || releasedToTodo
     ) {
@@ -4195,8 +4192,7 @@ export class TriageProcessor {
     const taskSearchParams = Type.Object({
       query: Type.String({ minLength: 1, description: "Search query" }),
       limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50, description: "Max results (default 20, max 50)" })),
-      includeDone: Type.Optional(Type.Boolean({ description: "Include done tasks (default true)" })),
-      includeArchived: Type.Optional(Type.Boolean({ description: "Include archived tasks (default true)" })),
+      includeDone: Type.Optional(Type.Boolean({ description: "Include done tasks (default false)" })),
     });
     const taskCreateParams = Type.Object({
       title: Type.Optional(Type.String({ description: "Short child task title" })),
@@ -4271,7 +4267,7 @@ export class TriageProcessor {
       label: "Search Tasks",
       description:
         "Keyword search across active tasks by default. " +
-        "Done and archived history is opt-in and must not be used for duplicate detection.",
+        "Done history is opt-in and must not be used for duplicate detection.",
       parameters: taskSearchParams,
       execute: async (
         _callId: string,
@@ -4286,7 +4282,7 @@ export class TriageProcessor {
         }
         const results = await store.searchTasks(query, {
           slim: true,
-          includeArchived: params.includeArchived ?? false,
+          includeArchived: false,
           limit: params.limit ?? 20,
         });
         const includeDone = params.includeDone ?? false;
@@ -4873,7 +4869,7 @@ export class TriageProcessor {
       if (isNearDuplicateCanonicalInactive(canonicalTask ?? undefined, canonicalFlags)) {
         if (canClearInactiveMarker) {
           /*
-          Completed and archived work is historical context, never an accepted duplicate verdict.
+          Completed or deleted work is historical context, never an accepted duplicate verdict.
           Clear the marker and require a fresh plan regardless of how the new task was created.
           */
           await this.clearDuplicateMarkerForReplan(
@@ -4915,10 +4911,6 @@ export class TriageProcessor {
           auditContext: { agentId: task.assignedAgentId ?? "triage", runId: generateSyntheticRunId("triage-delete", task.id), callerKind: "engine" },
         });
         if (!result.deleted) return;
-        await this.store.recordActivity({
-          type: "task:auto-archived-duplicate", taskId: task.id, taskTitle: task.title ?? "",
-          details: `Duplicate of ${canonicalId} — closed`, metadata: { canonicalTaskId: canonicalId, source: "explicit-marker" },
-        });
         return;
       }
       if (resolution === "prompt") {
@@ -4930,7 +4922,7 @@ export class TriageProcessor {
         });
         if (!applied) return;
         await this.store.logEntry(task.id, "Flagged as triage duplicate", `Duplicate marker points to ${canonicalId}; awaiting operator decision`);
-        await this.store.recordActivity({ type: "task:auto-archived-duplicate", taskId: task.id, details: "Flagged (not deleted) as triage-marker duplicate", metadata: { canonicalTaskId: canonicalId, source: "triage-marker-flagged" } });
+        await this.store.recordActivity({ type: "task:near-duplicate-flagged", taskId: task.id, details: "Flagged as triage-marker duplicate", metadata: { canonicalTaskId: canonicalId, source: "triage-marker-flagged" } });
         return;
       }
       // resolution === "keep" (and any other non-prompt/delete policy that drops the marker)
@@ -5143,24 +5135,9 @@ export class TriageProcessor {
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000)),
       ]);
 
-      if (preflightDecision && preflightDecision.decision === "archive") {
-        await archiveAsGhostBug(this.store, task.id, task.title ?? "", preflightDecision);
-        const auditor = createRunAuditor(this.store, {
-          taskId: task.id,
-          agentId: task.assignedAgentId ?? "triage",
-          runId: generateSyntheticRunId("triage", task.id),
-          phase: "triage",
-          source: "triage",
-        });
-        await auditor.database({
-          type: "task:auto-archived-ghost-bug",
-          target: task.id,
-          metadata: {
-            reason: preflightDecision.reason,
-            findings: preflightDecision.findings.slice(0, 10),
-          },
-        });
-        planLog.log(`${task.id} auto-archived as ghost bug`);
+      if (preflightDecision && preflightDecision.decision === "delete") {
+        await softDeleteAsGhostBug(this.store, task.id, preflightDecision);
+        planLog.log(`${task.id} auto-deleted as ghost bug`);
         return;
       }
     } catch (error: unknown) {

@@ -31,22 +31,20 @@ AI merge uses reviewing/landing for most of the live merge window; count them wi
 /**
  * FNXC:WorkflowSwitcher 2026-06-20-00:09:
  * The board/list workflow dropdown must show compact Todo, In Progress, and Done task counts for every selectable workflow without duplicating logic across render surfaces.
- * Use workflow column flags as the source of truth: archived or board-hidden columns are excluded, complete columns count as Done, active non-intake WIP columns count as In Progress, and all remaining visible work counts as Todo/not-yet-started.
+ * Use workflow column flags as the source of truth: board-hidden columns are excluded, complete columns count as Done, active non-intake WIP columns count as In Progress, and all remaining visible work counts as Todo/not-yet-started.
  *
  * FNXC:WorkflowSwitcher 2026-06-21-00:00:
- * Built-in linear workflows synthesize canonical lifecycle columns with empty traits, so their resolved flags cannot identify Done, In Progress, or Archived buckets.
+ * Built-in linear workflows synthesize canonical lifecycle columns with empty traits, so their resolved flags cannot identify Done or In Progress buckets.
  * Fall back to canonical lifecycle column ids only after flag-based classification fails, keeping trait-bearing workflows authoritative while preventing Done tasks in Quick fix-style lanes from being miscounted.
  */
 function classifyWorkflowStatusColumn(
   column: BoardWorkflowColumn
 ): WorkflowStatusBucket {
-  if (column.flags.archived || column.flags.hiddenFromBoard) return "excluded";
+  if (column.flags.hiddenFromBoard) return "excluded";
   if (column.flags.complete) return "done";
   if (column.flags.countsTowardWip && !column.flags.intake) return "inProgress";
 
   switch (column.id) {
-    case "archived":
-      return "excluded";
     case "done":
       return "done";
     case "in-progress":

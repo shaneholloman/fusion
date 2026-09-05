@@ -550,6 +550,8 @@ export interface UseTasksOptions {
 export function useTasks(options?: UseTasksOptions) {
   const projectId = options?.projectId;
   const resolveColumnFlags = options?.resolveColumnFlags;
+  const resolveColumnFlagsRef = useRef(resolveColumnFlags);
+  resolveColumnFlagsRef.current = resolveColumnFlags;
   const searchQuery = options?.searchQuery;
   const sseEnabled = options?.sseEnabled ?? true;
   /*
@@ -597,17 +599,6 @@ export function useTasks(options?: UseTasksOptions) {
   });
   const [isStale, setIsStale] = useState(true);
   const [lastRefreshErrorAt, setLastRefreshErrorAt] = useState<number | null>(null);
-  // Once the user expands the archived column, we keep including archived tasks
-  // in subsequent refreshes for the lifetime of this hook instance.
-  /*
-  FNXC:ArchivePagination 2026-07-08-00:00:
-  FN-7659 retired the merged-refresh path this flag used to drive (see the
-  loadArchivedTasks note below): nothing sets it true anymore, so it is kept
-  as a stable `false` constant purely for return-type/back-compat rather
-  than reactive state.
-  */
-  const includeArchived = false;
-  const includeArchivedRef = useRef(includeArchived);
   const tasksRef = useRef(tasks);
   // Task ids are project-local. Reconciliation may compare ids only after this owner fence holds.
   const tasksProjectIdRef = useRef<string | undefined>(projectId);
@@ -620,13 +611,18 @@ export function useTasks(options?: UseTasksOptions) {
   const releaseGateProvenanceRef = useRef(new Map<string, import("../utils/releaseGate").ReleaseGateProvenance>());
   const fetchVersionRef = useRef(0);
   /*
-  FNXC:TaskColumnSorting 2026-08-18-21:24:
-  Archive pages have their own generation fence because a page response is ordered by the
-  requested mode. Project changes and mode replacements invalidate every older first/next page
-  before it can append rows from a different snapshot.
+  FNXC:DonePagination 2026-09-04-10:36:
+  Done-page requests have a project-generation fence and a dedicated accumulator. Generic board refreshes replace the current lanes plus the newest Done page while preserving pages the operator explicitly loaded.
   */
-  const archivedRequestGenerationRef = useRef(0);
-  const archivedSortModeRef = useRef<TaskColumnSortMode>("completion-date-desc");
+  const completedRequestGenerationRef = useRef(0);
+  const completedTasksRef = useRef<Task[]>([]);
+  const completedOffsetRef = useRef(0);
+  const completedLoadingMoreRef = useRef(false);
+  const completedSortModeRef = useRef<TaskColumnSortMode>("completion-date-desc");
+  const [completedSortMode, setCompletedSortMode] = useState<TaskColumnSortMode>("completion-date-desc");
+  const [completedTotal, setCompletedTotal] = useState(0);
+  const [completedHasMore, setCompletedHasMore] = useState(false);
+  const [completedLoadingMore, setCompletedLoadingMore] = useState(false);
   const mergeIncomingTask = (current: Task, incoming: Task, mergeOptions?: TaskSnapshotMergeOptions): Task =>
     mergeTaskSnapshot(current, incoming, { ...mergeOptions, releaseGateProvenance: releaseGateProvenanceRef.current });
 
@@ -749,23 +745,8 @@ export function useTasks(options?: UseTasksOptions) {
   }, []);
   const lastConfirmedProjectIdRef = useRef<string | undefined>(undefined);
   const lastConfirmedSearchQueryRef = useRef<string | undefined>(undefined);
-  const lastConfirmedIncludeArchivedRef = useRef(false);
   // Track previous projectId to detect changes
   const previousProjectIdRef = useRef<string | undefined>(projectId);
-  /*
-  FNXC:ArchivePagination 2026-07-08-01:30:
-  Declared ahead of `refreshTasks` (rather than alongside the rest of the
-  archived-pagination state below) because `refreshTasks` reads it on every
-  generic refresh to decide whether to carry merged archived rows forward.
-  Code review (FN-7659) found `refreshTasks`'s unconditional
-  `setTasks(normalizedFetchedTasks)` silently discarded the archived page(s)
-  merged in by `loadArchivedTasks`/`loadMoreArchivedTasks` on the very next
-  SSE reconnect, tab-visibility regain, delete-invalidation refresh, or
-  search-then-clear — making `loadArchivedTasks` a permanent no-op
-  (`archivedLoadedRef.current` stays true) and silently emptying the
-  Archived column for the rest of the session.
-  */
-  const archivedLoadedRef = useRef(false);
   tasksRef.current = tasks;
   searchQueryRef.current = searchQuery;
 
@@ -780,7 +761,7 @@ export function useTasks(options?: UseTasksOptions) {
     // A request begun by the prior render still closes over its old project id. Invalidate it
     // synchronously, before effects install this context's fetch, so it cannot paint old cards.
     fetchVersionRef.current++;
-    archivedRequestGenerationRef.current++;
+    completedRequestGenerationRef.current++;
     projectContextVersionRef.current++;
     liveTaskMutationsRef.current.clear();
     releaseGateProvenanceRef.current.clear();
@@ -790,34 +771,26 @@ export function useTasks(options?: UseTasksOptions) {
 
   const VISIBILITY_REFRESH_DEBOUNCE_MS = 1000;
 
-  const refreshTasks = useCallback(async (options?: { clearOnError?: boolean; searchQueryOverride?: string; includeArchivedOverride?: boolean }) => {
+  const refreshTasks = useCallback(async (options?: { clearOnError?: boolean; searchQueryOverride?: string; resetCompletedPages?: boolean }) => {
     const requestVersion = ++fetchVersionRef.current;
     const requestLiveMutationVersion = liveMutationVersionRef.current;
     const requestProjectId = projectId; // Capture the projectId for this request
+    const requestCompletedSortMode = completedSortModeRef.current;
     const query = options?.searchQueryOverride ?? searchQueryRef.current;
-    /*
-    FNXC:ArchivePagination 2026-07-08-01:30:
-    When a search query is active and the user has expanded the Archived
-    column at least once this session, include archived rows in the
-    search-scoped fetch by default (unless the caller explicitly overrides).
-    This is bounded — the merged `listTasks`/`searchTasks` archived branch
-    already runs through `archiveDb.search()`'s own limit, not a full-table
-    load — and restores the pre-FN-7659 behavior where, once expanded,
-    search results included archived matches. A cleared/empty query falls
-    back to the narrow legacy `includeArchivedRef` (always false) so an
-    ordinary refresh never re-triggers a merged archived fetch; the Archived
-    column's own rows are instead carried forward below.
-    */
-    const wantArchived = options?.includeArchivedOverride ?? (query ? archivedLoadedRef.current : includeArchivedRef.current);
-
     try {
-      const fetchedTasks = await api.fetchTasks(undefined, undefined, requestProjectId, query, wantArchived);
+      const [fetchedTasks, completedPage] = await Promise.all([
+        api.fetchTasks(undefined, undefined, requestProjectId, query, !query),
+        query ? Promise.resolve(undefined) : api.fetchCompletedTasks(requestProjectId, 50, 0, requestCompletedSortMode),
+      ]);
       // Reject if project changed (compare against the projectId at request time) or version is stale
       if (fetchVersionRef.current !== requestVersion || projectId !== requestProjectId) {
         return;
       }
       const fetchedAt = Date.now();
-      const normalizedFetchedTasks = filterActiveTasks(fetchedTasks.map(normalizeTask)).map((task) => {
+      const completedPageTasks = completedPage?.tasks.map(normalizeNonBoardTask) ?? [];
+      const fetchedById = new Map<string, Task>();
+      for (const task of [...fetchedTasks, ...completedPageTasks]) fetchedById.set(task.id, task);
+      const normalizedFetchedTasks = filterActiveTasks([...fetchedById.values()].map(normalizeTask)).map((task) => {
         if (task.releaseGate === undefined) return task;
         const provenance = { fingerprint: releaseGateEvidenceFingerprint(task), capturedAt: fetchedAt };
         /*
@@ -834,30 +807,10 @@ export function useTasks(options?: UseTasksOptions) {
         return task;
       });
       /*
-      FNXC:ArchivePagination 2026-07-08-01:30:
-      A generic refresh (SSE reconnect resync, tab-visibility regain, delete-
-      fetch invalidation, project switch, or a search that has been cleared
-      back to "") always fetches with `includeArchived=false` and would
-      otherwise blow away any archived page(s) already merged in by
-      `loadArchivedTasks`/`loadMoreArchivedTasks`, making the Archived column
-      go silently empty and `loadArchivedTasks` a permanent no-op for the
-      rest of the session (code review finding, FN-7659). When this fetch
-      did not itself request archived rows and there is no active search
-      filter, carry the previously merged archived rows (`column ===
-      "archived"`) forward from the latest task state instead of discarding
-      them; active/non-archived rows from the fresh fetch stay authoritative
-      by id. A non-empty search query intentionally skips carry-over: `wantArchived`
-      is already derived above from `archivedLoadedRef` for query-bearing
-      fetches, so search results include fresh, query-matched archived rows
-      directly and boundedly (via `archiveDb.search()`'s own limit) rather
-      than re-showing stale, query-unfiltered archived cards from this branch.
-      Carry-over reads from `archivedTasksRef` (the canonical accumulator
-      maintained by `mergeArchivedPage`), not from the previous `tasks`
-      state, so a search that temporarily narrowed `tasks` to only its
-      matches cannot cause previously loaded archived rows to be lost once
-      the query is cleared.
+      FNXC:DonePagination 2026-09-04-10:36:
+      A generic board refresh fetches current work separately from the newest Done page. Preserve older pages the operator explicitly loaded, but let current-work and newest-page rows win by id; search results intentionally replace the visible snapshot without mutating the Done accumulator.
       */
-      const shouldCarryOverArchived = !wantArchived && !query && archivedLoadedRef.current;
+      const shouldCarryOverCompleted = !query && completedPage !== undefined;
       /*
       FNXC:DashboardResume 2026-08-05-18:36:
       React may defer a state updater, but the cache and mutation-fence cleanup run in this same
@@ -887,13 +840,24 @@ export function useTasks(options?: UseTasksOptions) {
         }
       }
       const freshIds = new Set(reconciledFetchedTasks.map((task) => task.id));
-      const archivedCarryOver = shouldCarryOverArchived && ownsCurrentRows
-        ? archivedTasksRef.current.filter((task) => !freshIds.has(task.id))
+      const completedCarryOver = shouldCarryOverCompleted && ownsCurrentRows && !options?.resetCompletedPages
+        ? completedTasksRef.current.filter((task) => !freshIds.has(task.id))
         : [];
-      const tasksForCache = reconciledFetchedTasks;
-      const nextTasks = archivedCarryOver.length > 0
-        ? [...reconciledFetchedTasks, ...archivedCarryOver]
+      const nextTasks = completedCarryOver.length > 0
+        ? [...reconciledFetchedTasks, ...completedCarryOver]
         : reconciledFetchedTasks;
+      const tasksForCache = nextTasks;
+      if (completedPage) {
+        const nextById = new Map(nextTasks.map((task) => [task.id, task]));
+        const nextCompleted = [
+          ...completedPageTasks.map((task) => nextById.get(task.id) ?? task),
+          ...completedCarryOver,
+        ];
+        completedTasksRef.current = nextCompleted;
+        completedOffsetRef.current = nextCompleted.length;
+        setCompletedTotal(completedPage.total);
+        setCompletedHasMore(nextCompleted.length < completedPage.total);
+      }
       const retainedTaskIds = new Set(nextTasks.map((task) => task.id));
       for (const taskId of releaseGateProvenanceRef.current.keys()) {
         if (!retainedTaskIds.has(taskId)) releaseGateProvenanceRef.current.delete(taskId);
@@ -918,7 +882,6 @@ export function useTasks(options?: UseTasksOptions) {
       boardFetchConfirmedRef.current = true;
       lastConfirmedProjectIdRef.current = requestProjectId;
       lastConfirmedSearchQueryRef.current = query;
-      lastConfirmedIncludeArchivedRef.current = wantArchived;
     } catch (error) {
       // Reject if project changed or version is stale
       if (fetchVersionRef.current !== requestVersion || projectId !== requestProjectId) {
@@ -961,15 +924,14 @@ export function useTasks(options?: UseTasksOptions) {
   Visibility, focus, pageshow, and an SSE reconnect are independent browser resume signals; any one
   may be the only signal delivered by a desktop tab, bfcache restore, mobile PWA, or resumed socket.
   They all enter this seam, which deduplicates only an overlapping request for the same captured
-  project/search/archive identity. A changed context, an unmounted hook, or an older request version
+  project/search identity. A changed context, an unmounted hook, or an older request version
   cannot write cards after newer server or live-event state, and a failed request clears the in-flight
   marker so the next resume signal retries without blanking the usable SWR snapshot.
   */
   const revalidateAfterResume = useCallback((trigger: "visibility" | "focus" | "pageshow" | "sse-reconnect", reason?: string) => {
     if (!mountedRef.current) return;
     const query = searchQueryRef.current;
-    const wantArchived = query ? archivedLoadedRef.current : includeArchivedRef.current;
-    const identity = `${projectContextVersionRef.current}:${projectId ?? "default"}:${query ?? ""}:${wantArchived}`;
+    const identity = `${projectContextVersionRef.current}:${projectId ?? "default"}:${query ?? ""}`;
     const existing = resumeRefreshRef.current;
     if (existing?.identity === identity) return;
 
@@ -1012,140 +974,69 @@ export function useTasks(options?: UseTasksOptions) {
     }
   }, [sseEnabled]);
 
-  /*
-  FNXC:TaskColumnSorting 2026-08-18-21:24:
-  The physical Archived lane keeps its selected order in the hook because SQL must apply that
-  order before each bounded page. Non-archived lane choices stay in Board, while this one is
-  committed only after page zero succeeds so a failed replacement cannot lie about loaded rows.
-  */
-  const [archivedSortMode, setArchivedSortModeState] = useState<TaskColumnSortMode>("completion-date-desc");
-  const [archivedHasMore, setArchivedHasMore] = useState(false);
-  const [archivedLoadingMore, setArchivedLoadingMore] = useState(false);
-  const archivedOffsetRef = useRef(0);
-  // Note: archivedLoadedRef is declared earlier (near tasksRef) so refreshTasks can read it.
-  const archivedLoadingMoreRef = useRef(false);
-  /*
-  FNXC:ArchivePagination 2026-07-08-01:30:
-  Canonical store of every archived row merged in so far via
-  `loadArchivedTasks`/`loadMoreArchivedTasks`, independent of the transient
-  `tasks` state. A search-scoped `refreshTasks` fetch can temporarily
-  replace `tasks` with only the query-matched rows (active + matching
-  archived); if the generic-refresh carry-over in `refreshTasks` read
-  archived rows back out of `tasks` at that point, clearing the query would
-  "carry over" only the narrower search-result set and permanently lose any
-  previously loaded archived rows that did not match the last query. Keeping
-  a dedicated accumulator means carry-over always restores the full set of
-  archived rows loaded so far, regardless of what the last fetch's result
-  shape happened to be.
-  */
-  const archivedTasksRef = useRef<Task[]>([]);
-
-  const archiveRequestIsCurrent = useCallback((generation: number, requestProjectId: string | undefined, _requestSortMode: TaskColumnSortMode) => (
-    archivedRequestGenerationRef.current === generation && projectId === requestProjectId
+  const completedRequestIsCurrent = useCallback((generation: number, requestProjectId: string | undefined) => (
+    completedRequestGenerationRef.current === generation && projectId === requestProjectId
   ), [projectId]);
 
-  const mergeArchivedPage = useCallback((page: Task[]) => {
+  const mergeCompletedPage = useCallback((page: Task[]) => {
     const normalizedPage = page.map(normalizeNonBoardTask);
-    const knownArchivedIds = new Set(archivedTasksRef.current.map((task) => task.id));
+    const knownIds = new Set(completedTasksRef.current.map((task) => task.id));
     const pageIds = new Set<string>();
-    const newArchived = normalizedPage.filter((task) => {
-      if (knownArchivedIds.has(task.id) || pageIds.has(task.id)) return false;
+    const additions = normalizedPage.filter((task) => {
+      if (knownIds.has(task.id) || pageIds.has(task.id)) return false;
       pageIds.add(task.id);
       return true;
     });
-    if (newArchived.length > 0) {
-      archivedTasksRef.current = [...archivedTasksRef.current, ...newArchived];
-    }
-    setTasks((prev) => {
-      const existingIds = new Set(prev.map((task) => task.id));
-      const additions = normalizedPage.filter((task) => !existingIds.has(task.id));
-      if (additions.length === 0) return prev;
-      return [...prev, ...additions.filter((task, index, rows) => rows.findIndex((candidate) => candidate.id === task.id) === index)];
+    if (additions.length === 0) return;
+    completedTasksRef.current = [...completedTasksRef.current, ...additions];
+    completedOffsetRef.current = completedTasksRef.current.length;
+    setTasks((previous) => {
+      const existingIds = new Set(previous.map((task) => task.id));
+      const next = [...previous, ...additions.filter((task) => !existingIds.has(task.id))];
+      tasksRef.current = next;
+      return next;
     });
   }, []);
 
-  const replaceArchivedPage = useCallback((page: Task[]) => {
-    const normalizedPage = page.map(normalizeNonBoardTask);
-    const pageById = new Map(normalizedPage.map((task) => [task.id, task]));
-    const nextArchived = [...pageById.values()];
-    const previousArchivedIds = new Set(archivedTasksRef.current.map((task) => task.id));
-    archivedTasksRef.current = nextArchived;
-    setTasks((prev) => {
-      const withoutPreviousArchive = prev.filter((task) => !previousArchivedIds.has(task.id));
-      const existingIds = new Set(withoutPreviousArchive.map((task) => task.id));
-      return [...withoutPreviousArchive, ...nextArchived.filter((task) => !existingIds.has(task.id))];
-    });
-  }, []);
-
-  /** Lazy-load archived tasks, page 1 (100, newest-first). Called by the Board when the archived column is first expanded. */
-  const loadArchivedTasks = useCallback(async () => {
-    if (archivedLoadedRef.current) return;
-    archivedLoadedRef.current = true;
-    const requestGeneration = archivedRequestGenerationRef.current;
+  /** Fetch the next bounded Done page. No-op when every completed task is already loaded. */
+  const loadMoreCompletedTasks = useCallback(async () => {
+    if (completedLoadingMoreRef.current || !completedHasMore) return;
+    completedLoadingMoreRef.current = true;
+    setCompletedLoadingMore(true);
+    const requestGeneration = completedRequestGenerationRef.current;
     const requestProjectId = projectId;
-    const requestSortMode = archivedSortModeRef.current;
     try {
-      const { tasks: page, hasMore } = await api.fetchArchivedTasks(projectId, 100, 0, requestSortMode);
-      if (!archiveRequestIsCurrent(requestGeneration, requestProjectId, requestSortMode)) return;
-      mergeArchivedPage(page);
-      archivedOffsetRef.current = page.length;
-      setArchivedHasMore(hasMore);
-    } catch {
-      // Allow a future expand attempt to retry the first page, unless this request is stale.
-      if (archiveRequestIsCurrent(requestGeneration, requestProjectId, requestSortMode)) {
-        archivedLoadedRef.current = false;
-      }
-    }
-  }, [archiveRequestIsCurrent, projectId, mergeArchivedPage]);
-
-  /** Fetch the next 100-item page of archived tasks. No-op when there is no further page or a fetch is already in flight. */
-  const loadMoreArchivedTasks = useCallback(async () => {
-    if (!archivedLoadedRef.current || archivedLoadingMoreRef.current) return;
-    if (!archivedHasMore) return;
-    archivedLoadingMoreRef.current = true;
-    setArchivedLoadingMore(true);
-    const requestGeneration = archivedRequestGenerationRef.current;
-    const requestProjectId = projectId;
-    const requestSortMode = archivedSortModeRef.current;
-    try {
-      const { tasks: page, hasMore } = await api.fetchArchivedTasks(projectId, 100, archivedOffsetRef.current, requestSortMode);
-      if (!archiveRequestIsCurrent(requestGeneration, requestProjectId, requestSortMode)) return;
-      mergeArchivedPage(page);
-      archivedOffsetRef.current += page.length;
-      setArchivedHasMore(hasMore);
+      const page = await api.fetchCompletedTasks(projectId, 50, completedOffsetRef.current, completedSortModeRef.current);
+      if (!completedRequestIsCurrent(requestGeneration, requestProjectId)) return;
+      mergeCompletedPage(page.tasks);
+      setCompletedTotal(page.total);
+      setCompletedHasMore(completedTasksRef.current.length < page.total && page.hasMore);
     } finally {
-      if (archiveRequestIsCurrent(requestGeneration, requestProjectId, requestSortMode)) {
-        archivedLoadingMoreRef.current = false;
-        setArchivedLoadingMore(false);
+      if (completedRequestIsCurrent(requestGeneration, requestProjectId)) {
+        completedLoadingMoreRef.current = false;
+        setCompletedLoadingMore(false);
       }
     }
-  }, [projectId, archivedHasMore, archiveRequestIsCurrent, mergeArchivedPage]);
+  }, [completedHasMore, completedRequestIsCurrent, mergeCompletedPage, projectId]);
 
-  /** Replace the archive accumulator only after the requested mode's first page is current. */
-  const changeArchivedSortMode = useCallback(async (nextSortMode: TaskColumnSortMode) => {
-    if (nextSortMode === archivedSortModeRef.current) return;
-    const requestGeneration = ++archivedRequestGenerationRef.current;
-    const requestProjectId = projectId;
-    archivedLoadingMoreRef.current = false;
-    setArchivedLoadingMore(true);
-    try {
-      const { tasks: page, hasMore } = await api.fetchArchivedTasks(projectId, 100, 0, nextSortMode);
-      if (!archiveRequestIsCurrent(requestGeneration, requestProjectId, nextSortMode)) return;
-      replaceArchivedPage(page);
-      /* FNXC:ArchivePagination 2026-08-18-22:22: Keep subsequent archive pages on the committed order after a successful sort replacement. */
-      archivedSortModeRef.current = nextSortMode;
-      setArchivedSortModeState(nextSortMode);
-      archivedOffsetRef.current = page.length;
-      setArchivedHasMore(hasMore);
-      archivedLoadedRef.current = true;
-    } catch {
-      // Keep the committed mode and accumulated rows unchanged after a failed replacement.
-    } finally {
-      if (archiveRequestIsCurrent(requestGeneration, requestProjectId, nextSortMode)) {
-        setArchivedLoadingMore(false);
-      }
-    }
-  }, [archiveRequestIsCurrent, projectId, replaceArchivedPage]);
+  /*
+  FNXC:DonePagination 2026-09-04-19:28:
+  A Done sort change resets the accumulated server pages before adopting page zero in the new order.
+  The generation fence rejects an older Show-more response, while the shared refresh keeps current
+  lanes and the exact Done total synchronized in one authoritative snapshot.
+  */
+  const changeCompletedSortMode = useCallback(async (mode: TaskColumnSortMode) => {
+    if (completedSortModeRef.current === mode) return;
+    completedSortModeRef.current = mode;
+    setCompletedSortMode(mode);
+    completedRequestGenerationRef.current++;
+    completedTasksRef.current = [];
+    completedOffsetRef.current = 0;
+    completedLoadingMoreRef.current = false;
+    setCompletedLoadingMore(false);
+    setCompletedHasMore(false);
+    await refreshTasks({ resetCompletedPages: true });
+  }, [refreshTasks]);
 
   // Debounced search effect - separate from refreshTasks to avoid dependency cycle
   const prevSearchQueryRef = useRef<string | undefined>(searchQuery);
@@ -1211,19 +1102,13 @@ export function useTasks(options?: UseTasksOptions) {
     setIsStale(true);
     void refreshTasks({ clearOnError: true });
     projectChangeRefreshPendingRef.current = false;
-    // FNXC:ArchivePagination 2026-07-08-00:00: reset archived-page state on
-    // project switch so a new project's Archived column starts collapsed
-    // and re-fetches its own page 1 rather than reusing the previous
-    // project's offset/hasMore.
-    archivedRequestGenerationRef.current++;
-    archivedLoadedRef.current = false;
-    archivedOffsetRef.current = 0;
-    archivedLoadingMoreRef.current = false;
-    archivedSortModeRef.current = "completion-date-desc";
-    archivedTasksRef.current = [];
-    setArchivedSortModeState("completion-date-desc");
-    setArchivedHasMore(false);
-    setArchivedLoadingMore(false);
+    completedRequestGenerationRef.current++;
+    completedOffsetRef.current = 0;
+    completedLoadingMoreRef.current = false;
+    completedTasksRef.current = [];
+    setCompletedTotal(0);
+    setCompletedHasMore(false);
+    setCompletedLoadingMore(false);
 
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") {
@@ -1331,6 +1216,28 @@ export function useTasks(options?: UseTasksOptions) {
       tasksRef.current = nextTasks;
       setTasks(nextTasks);
     };
+    const isCompletedTask = (task: Task, column: ColumnId = task.column): boolean => (
+      resolveColumnFlagsRef.current?.({ ...task, column })?.complete === true || column === "done"
+    );
+    const syncCompletedMembership = (task: Task, previouslyCompleted: boolean, currentlyCompleted: boolean) => {
+      const currentIndex = completedTasksRef.current.findIndex((candidate) => candidate.id === task.id);
+      if (currentlyCompleted) {
+        completedTasksRef.current = currentIndex === -1
+          ? [task, ...completedTasksRef.current]
+          : completedTasksRef.current.map((candidate, index) => index === currentIndex ? task : candidate);
+      } else if (currentIndex !== -1) {
+        completedTasksRef.current = completedTasksRef.current.filter((candidate) => candidate.id !== task.id);
+      }
+      completedOffsetRef.current = completedTasksRef.current.length;
+      const delta = Number(currentlyCompleted) - Number(previouslyCompleted);
+      if (delta !== 0) {
+        setCompletedTotal((current) => {
+          const next = Math.max(0, current + delta);
+          setCompletedHasMore(completedTasksRef.current.length < next);
+          return next;
+        });
+      }
+    };
     const handleCreated = (e: MessageEvent) => {
       if (isStale()) {
         traceDroppedStaleEvent();
@@ -1344,11 +1251,14 @@ export function useTasks(options?: UseTasksOptions) {
         void refreshTasksRef.current({ searchQueryOverride: searchQueryRef.current });
         return;
       }
+      const existingCreatedTask = tasksRef.current.find((candidate) => candidate.id === task.id);
       if (isSoftDeleted(task)) {
+        if (existingCreatedTask) syncCompletedMembership(task, isCompletedTask(existingCreatedTask), false);
         applyLiveTasks((prev) => prev.filter((candidate) => candidate.id !== task.id));
         pushTrace("useTasks", "soft-deleted-task-suppressed", { event: "task:created", id: task.id });
         return;
       }
+      syncCompletedMembership(task, existingCreatedTask ? isCompletedTask(existingCreatedTask) : false, isCompletedTask(task));
       applyLiveTasks((prev) => {
         const existingIndex = prev.findIndex((candidate) => candidate.id === task.id);
         if (existingIndex === -1) {
@@ -1380,10 +1290,11 @@ export function useTasks(options?: UseTasksOptions) {
         return;
       }
       if (!payload) return;
-      const { task, to } = payload;
+      const { task, from, to } = payload;
       const normalizedTask = normalizeTask(stripTransientReleaseGate(task));
       if (isSoftDeleted(normalizedTask)) {
         recordLiveMutation(normalizedTask, true);
+        syncCompletedMembership(normalizedTask, isCompletedTask(normalizedTask, from), false);
         applyLiveTasks((prev) => prev.filter((candidate) => candidate.id !== normalizedTask.id));
         pushTrace("useTasks", "soft-deleted-task-suppressed", { event: "task:moved", id: normalizedTask.id });
         return;
@@ -1393,6 +1304,7 @@ export function useTasks(options?: UseTasksOptions) {
       const nextColumn: ColumnId = typeof to === "string" && to ? to : normalizedTask.column;
       const movedTask = { ...normalizedTask, column: nextColumn };
       recordLiveMutation(movedTask, false);
+      syncCompletedMembership(movedTask, isCompletedTask(normalizedTask, from), isCompletedTask(movedTask, nextColumn));
       applyLiveTasks((prev) => {
         const existingIndex = prev.findIndex((t) => t.id === movedTask.id);
         if (existingIndex === -1) {
@@ -1425,13 +1337,16 @@ export function useTasks(options?: UseTasksOptions) {
       }
       if (!payload) return;
       const incoming = normalizeTask(stripTransientReleaseGate(payload));
+      const previousUpdatedTask = tasksRef.current.find((candidate) => candidate.id === incoming.id);
       recordLiveMutation(incoming, isSoftDeleted(incoming));
       if (isSoftDeleted(incoming)) {
         // FN-5135: treat deletedAt-bearing task:updated payloads as delete-equivalent.
+        if (previousUpdatedTask) syncCompletedMembership(incoming, isCompletedTask(previousUpdatedTask), false);
         applyLiveTasks((prev) => prev.filter((candidate) => candidate.id !== incoming.id));
         pushTrace("useTasks", "soft-deleted-task-suppressed", { event: "task:updated", id: incoming.id });
         return;
       }
+      syncCompletedMembership(incoming, previousUpdatedTask ? isCompletedTask(previousUpdatedTask) : false, isCompletedTask(incoming));
       applyLiveTasks((prev) => {
         const existingIndex = prev.findIndex((t) => t.id === incoming.id);
         if (existingIndex === -1) {
@@ -1459,7 +1374,9 @@ export function useTasks(options?: UseTasksOptions) {
         return;
       }
       const task = normalizeTask(stripTransientReleaseGate(payload));
+      const previousDeletedTask = tasksRef.current.find((candidate) => candidate.id === task.id);
       recordLiveMutation(task, true);
+      syncCompletedMembership(task, previousDeletedTask ? isCompletedTask(previousDeletedTask) : isCompletedTask(task), false);
       applyLiveTasks((prev) => prev.filter((t) => t.id !== task.id));
     };
 
@@ -1483,7 +1400,9 @@ export function useTasks(options?: UseTasksOptions) {
         return;
       }
       const mergedTask = { ...normalizedTask, column: "done" as Column };
+      const previousMergedTask = tasksRef.current.find((candidate) => candidate.id === mergedTask.id);
       recordLiveMutation(mergedTask, false);
+      syncCompletedMembership(mergedTask, previousMergedTask ? isCompletedTask(previousMergedTask) : false, true);
       applyLiveTasks((prev) => {
         const existingIndex = prev.findIndex((t) => t.id === mergedTask.id);
         if (existingIndex === -1) {
@@ -1793,25 +1712,6 @@ export function useTasks(options?: UseTasksOptions) {
     }
   }, [projectId]);
 
-  const archiveTask = useCallback(async (
-    id: string,
-    options?: { removeLineageReferences?: boolean },
-  ): Promise<Task> => {
-    const task = normalizeNonBoardTask(await api.archiveTask(id, projectId, options));
-    setTasks((prev) =>
-      prev.map((t) => (t.id === id ? task : t))
-    );
-    return task;
-  }, [projectId]);
-
-  const unarchiveTask = useCallback(async (id: string): Promise<Task> => {
-    const task = normalizeNonBoardTask(await api.unarchiveTask(id, projectId));
-    setTasks((prev) =>
-      prev.map((t) => (t.id === id ? task : t))
-    );
-    return task;
-  }, [projectId]);
-
   /*
   FNXC:TaskRevert 2026-07-05-00:00 (FN-7525):
   Client-side `revertTask` op. Deliberately does NOT patch the source task's
@@ -1829,18 +1729,6 @@ export function useTasks(options?: UseTasksOptions) {
     const result = await api.revertTask(id, projectId, body);
     void refreshTasksRef.current?.();
     return result;
-  }, [projectId]);
-
-  const archiveAllDone = useCallback(async (): Promise<Task[]> => {
-    const archived = await api.archiveAllDone(projectId);
-    const normalized = archived.map(normalizeNonBoardTask);
-    setTasks((prev) =>
-      prev.map((t) => {
-        const updated = normalized.find((archived) => archived.id === t.id);
-        return updated || t;
-      })
-    );
-    return normalized;
   }, [projectId]);
 
   const ingestCreatedTasks = useCallback((incomingTasks: Task[]): void => {
@@ -1884,5 +1772,5 @@ export function useTasks(options?: UseTasksOptions) {
     advanceFreshnessClockForLiveUpdate();
   }, [advanceFreshnessClockForLiveUpdate]);
 
-  return { tasks, isStale, lastRefreshErrorAt, createTask, moveTask, pauseTask, unpauseTask, deleteTask, mergeTask, retryTask, bypassReview, resetTask, duplicateTask, updateTask, archiveTask, unarchiveTask, revertTask, archiveAllDone, loadArchivedTasks, loadMoreArchivedTasks, changeArchivedSortMode, archivedSortMode, archivedHasMore, archivedLoadingMore, includeArchived, refreshTasks, ingestCreatedTasks, lastFetchTimeMs: lastFetchTimeMs.current };
+  return { tasks, isStale, lastRefreshErrorAt, createTask, moveTask, pauseTask, unpauseTask, deleteTask, mergeTask, retryTask, bypassReview, resetTask, duplicateTask, updateTask, revertTask, loadMoreCompletedTasks, completedSortMode, changeCompletedSortMode, completedTotal, completedHasMore, completedLoadingMore, refreshTasks, ingestCreatedTasks, lastFetchTimeMs: lastFetchTimeMs.current };
 }

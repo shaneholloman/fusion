@@ -146,6 +146,32 @@ describe("Column count-flash", () => {
     expect(badge.className).not.toContain("count-flash");
   });
 
+  it("shows the exact Done total while rendering a bounded page and loading more", async () => {
+    const tasks = Array.from({ length: 50 }, (_, index) => ({
+      ...makeTask(`FN-DONE-${index}`),
+      column: "done" as ColumnType,
+    }));
+    const onLoadMore = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <Column
+        {...defaultProps}
+        column={"done" as ColumnType}
+        columnName="Done"
+        columnFlags={{ complete: true }}
+        tasks={tasks}
+        totalTaskCount={1_284}
+        serverHasMore
+        onLoadMoreServer={onLoadMore}
+      />,
+    );
+
+    expect(screen.getByLabelText("1,284 tasks")).toHaveTextContent("1,284");
+    expect(taskCardRenderSpy).toHaveBeenCalledTimes(50);
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(onLoadMore).toHaveBeenCalledOnce();
+  });
+
   it("shows accurate executing/total for WIP (unpaused active over card total)", () => {
     const tasks = [
       { ...makeTask("FN-001"), column: "in-progress" as ColumnType },
@@ -546,54 +572,6 @@ describe("Column pagination", () => {
     expect(screen.queryByRole("button", { name: /Load 25 more/i })).toBeNull();
   });
 
-  it("does not paginate archived columns", () => {
-    const tasks = Array.from({ length: 110 }, (_, index) => ({ ...makeTask(`KB-${String(index + 1).padStart(3, "0")}`), column: "archived" as ColumnType }));
-    render(<Column {...defaultProps} column="archived" tasks={tasks} collapsed={false} />);
-
-    expect(screen.queryByRole("button", { name: /Load 25 more/i })).toBeNull();
-  });
-
-  /*
-  FNXC:ArchivePagination 2026-07-08-00:00:
-  FN-7659 — the Archived column's server-backed "Show more" is a distinct
-  affordance from the client-side Load-more button covered above: it renders
-  only when `archivedHasMore` is true, is absent for an empty/under-one-page
-  archive, and invokes `onLoadMoreArchived` (not the client-side visible-count
-  bump) when clicked.
-  */
-  describe("archived pagination (FN-7659)", () => {
-    const archivedTasks = Array.from({ length: 3 }, (_, index) => ({
-      ...makeTask(`KB-ARCH-${index + 1}`),
-      column: "archived" as ColumnType,
-    }));
-
-    it("shows the server-backed Show more button only when archivedHasMore is true", () => {
-      render(<Column {...defaultProps} column="archived" tasks={archivedTasks} collapsed={false} archivedHasMore={false} />);
-      expect(screen.queryByRole("button", { name: /Show more/i })).toBeNull();
-    });
-
-    it("renders no Show more button for an empty archive", () => {
-      render(<Column {...defaultProps} column="archived" tasks={[]} collapsed={false} archivedHasMore={false} />);
-      expect(screen.queryByRole("button", { name: /Show more/i })).toBeNull();
-    });
-
-    it("renders the Show more button when archivedHasMore is true and invokes onLoadMoreArchived on click", async () => {
-      const onLoadMoreArchived = vi.fn().mockResolvedValue(undefined);
-      const user = userEvent.setup();
-      render(<Column {...defaultProps} column="archived" tasks={archivedTasks} collapsed={false} archivedHasMore onLoadMoreArchived={onLoadMoreArchived} />);
-
-      const button = screen.getByRole("button", { name: /Show more/i });
-      await user.click(button);
-
-      expect(onLoadMoreArchived).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not render the Show more button when the archived column is collapsed", () => {
-      render(<Column {...defaultProps} column="archived" tasks={archivedTasks} collapsed archivedHasMore onLoadMoreArchived={vi.fn()} />);
-      expect(screen.queryByRole("button", { name: /Show more/i })).toBeNull();
-    });
-  });
-
   /*
   FNXC:BoardColumnWindowing 2026-07-26-12:30:
   These two cases previously pinned the OLD contract (search disables pagination, render every match).
@@ -932,183 +910,19 @@ describe("Column plan auto-approval action", () => {
   });
 });
 
-describe("Column Done action menu", () => {
-  it("renders one accessible Done actions dropdown with sort choices and archive", async () => {
-    const user = userEvent.setup();
-    const { container } = render(
-      <Column
-        {...defaultProps}
-        column="done"
-        tasks={[{ ...makeTask("FN-001"), column: "done" }]}
-        onArchiveAllDone={vi.fn().mockResolvedValue([])}
-        doneSortMode="completion-date-desc"
-        onDoneSortModeChange={vi.fn()}
-      />,
-    );
-
-    const header = screen.getByRole("heading", { name: "Done" }).closest(".column-header") as HTMLElement;
-    const actionsButton = screen.getByRole("button", { name: "Done column actions" });
-    expect(actionsButton.closest(".column-header")).toBe(header);
-    expect(header.querySelectorAll(".column-menu")).toHaveLength(1);
-    expect(screen.queryByRole("combobox", { name: "Sort Done tasks" })).toBeNull();
-    expect(container.querySelector(".done-sort-control")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Archive all done tasks" })).toBeNull();
-
-    await user.click(actionsButton);
-
-    expect(screen.getByRole("menuitemradio", { name: /Completion date \(newest first\)/ })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByRole("menuitemradio", { name: /Task ID \(newest first\)/ })).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByRole("menuitem", { name: /Archive all done tasks/i })).toBeEnabled();
+describe("Column terminal actions", () => {
+  it("does not render an action shell for Done", () => {
+    const { container } = render(<Column {...defaultProps} column="done" columnFlags={{ complete: true }} tasks={[{ ...makeTask("FN-001"), column: "done" }]} />);
+    expect(screen.queryByRole("button", { name: "Done column actions" })).toBeNull();
+    expect(container.querySelector(".column-menu")).toBeNull();
   });
 
-  it("renders the same Done dropdown for workflow complete columns with custom ids", async () => {
+  it("keeps the generic sort menu on non-complete columns", async () => {
     const user = userEvent.setup();
-    render(
-      <Column
-        {...defaultProps}
-        column={"shipped" as ColumnType}
-        workflowMode
-        columnDisplayName="Shipped"
-        columnFlags={{ complete: true }}
-        tasks={[{ ...makeTask("FN-001"), column: "shipped" as ColumnType }]}
-        onArchiveAllDone={vi.fn().mockResolvedValue([])}
-        doneSortMode="completion-date-desc"
-        onDoneSortModeChange={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByRole("heading", { name: "Shipped" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Shipped column actions" }));
-
-    expect(screen.getByRole("menuitemradio", { name: /Completion date \(newest first\)/ })).toBeInTheDocument();
-    expect(screen.getByRole("menuitemradio", { name: /Task ID \(newest first\)/ })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /Archive all done tasks/i })).toBeInTheDocument();
-  });
-
-  it("selects task ID descending from the Done actions menu", async () => {
-    const user = userEvent.setup();
-    const onDoneSortModeChange = vi.fn();
-    render(
-      <Column
-        {...defaultProps}
-        column="done"
-        tasks={[{ ...makeTask("FN-001"), column: "done" }]}
-        doneSortMode="completion-date-desc"
-        onDoneSortModeChange={onDoneSortModeChange}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Done column actions" }));
-    await user.click(screen.getByRole("menuitemradio", { name: /Task ID \(newest first\)/ }));
-
-    expect(onDoneSortModeChange).toHaveBeenCalledWith("task-id-desc");
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("selects completion-date descending from the Done actions menu", async () => {
-    const user = userEvent.setup();
-    const onDoneSortModeChange = vi.fn();
-    render(
-      <Column
-        {...defaultProps}
-        column="done"
-        tasks={[{ ...makeTask("FN-002"), column: "done" }]}
-        doneSortMode="task-id-desc"
-        onDoneSortModeChange={onDoneSortModeChange}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Done column actions" }));
-    await user.click(screen.getByRole("menuitemradio", { name: /Completion date \(newest first\)/ }));
-
-    expect(onDoneSortModeChange).toHaveBeenCalledWith("completion-date-desc");
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("archives Done tasks from the menu only after confirmation", async () => {
-    const user = userEvent.setup();
-    const onArchiveAllDone = vi.fn().mockResolvedValue([{ ...makeTask("FN-001"), column: "archived" }]);
-    render(
-      <Column
-        {...defaultProps}
-        column="done"
-        tasks={[{ ...makeTask("FN-001"), column: "done" }]}
-        onArchiveAllDone={onArchiveAllDone}
-        doneSortMode="completion-date-desc"
-        onDoneSortModeChange={vi.fn()}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Done column actions" }));
-    await user.click(screen.getByRole("menuitem", { name: /Archive all done tasks/i }));
-
-    await waitFor(() => expect(onArchiveAllDone).toHaveBeenCalledTimes(1));
-    expect(mockConfirm).toHaveBeenCalledWith({
-      title: "Archive All Done",
-      message: "Archive all 1 done tasks?",
-      danger: true,
-    });
-  });
-
-  it("keeps sort choices available while blocking archive for an empty Done column", async () => {
-    const user = userEvent.setup();
-    const onArchiveAllDone = vi.fn().mockResolvedValue([]);
-    render(
-      <Column
-        {...defaultProps}
-        column="done"
-        tasks={[]}
-        onArchiveAllDone={onArchiveAllDone}
-        doneSortMode="completion-date-desc"
-        onDoneSortModeChange={vi.fn()}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Done column actions" }));
-
-    expect(screen.getByRole("menuitemradio", { name: /Completion date \(newest first\)/ })).toBeInTheDocument();
-    expect(screen.getByRole("menuitemradio", { name: /Task ID \(newest first\)/ })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /Archive all done tasks/i })).toBeDisabled();
-    expect(onArchiveAllDone).not.toHaveBeenCalled();
-    expect(mockConfirm).not.toHaveBeenCalled();
-  });
-
-  it("shows the generic sort menu on non-complete columns without standalone wrappers", async () => {
-    const user = userEvent.setup();
-    const { container } = render(
-      <Column
-        {...defaultProps}
-        column="todo"
-        tasks={[{ ...makeTask("FN-001"), column: "todo" }]}
-        onArchiveAllDone={vi.fn().mockResolvedValue([])}
-        doneSortMode="completion-date-desc"
-        onDoneSortModeChange={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByRole("combobox", { name: "Sort Done tasks" })).toBeNull();
-    expect(container.querySelector(".done-sort-control")).toBeNull();
-    expect(container.querySelector("[aria-label='Sort tasks in this column']")).toBeNull();
-
+    render(<Column {...defaultProps} column="todo" tasks={[{ ...makeTask("FN-001"), column: "todo" }]} sortMode="completion-date-desc" onSortModeChange={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Todo column actions" }));
-
     expect(screen.getByRole("menuitemradio", { name: /Arrival in this column/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitemradio", { name: /Task ID \(newest first\)/ })).toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: /Archive all done tasks/i })).toBeNull();
-  });
-
-  it("does not render a Done actions menu when Done sort and archive props are absent", () => {
-    const { container } = render(
-      <Column
-        {...defaultProps}
-        column="done"
-        tasks={[{ ...makeTask("FN-001"), column: "done" }]}
-      />,
-    );
-
-    expect(screen.queryByRole("button", { name: "Done column actions" })).toBeNull();
-    expect(screen.queryByRole("combobox", { name: "Sort Done tasks" })).toBeNull();
-    expect(container.querySelector(".done-sort-control")).toBeNull();
   });
 });
 

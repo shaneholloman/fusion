@@ -22,14 +22,14 @@ import { BranchGroup, BranchGroupCreateInput, ColumnId, MergeRequestRecord, Merg
 import { validateNodeOverrideChange, resolveNodeOverrideLanes} from "../mesh/node-override-guard.js";
 import { WorkflowMovePolicyInput } from "../workflows/workflow-extension-types.js";
 import { resolveWorkflowIrById, isTaskTerminalNodeIdAsync} from "../workflows/workflow-ir-resolver.js";
-import { WorkflowSettingDefinition, WorkflowIr} from "../workflows/workflow-ir-types.js";
+import { WorkflowSettingDefinition } from "../workflows/workflow-ir-types.js";
 import { resolveTaskLifecycleColumns } from "../workflows/workflow-lifecycle-traits.js";
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MoveTaskInternalOptions, MoveTaskOptions, storeLog } from "../store.js";
-import { resolveProjectColumnsForRoles } from "../project-lane-vocabulary.js";
+import { ARCHIVED_SENTINEL_LANES, resolveProjectColumnsForRoles } from "../project-lane-vocabulary.js";
 import {writePromptFileAtomic} from "./prompt-file.js";
 
 /*
@@ -77,7 +77,7 @@ member blocks promotion, while an archived member with persisted landing proof p
 The PostgreSQL path must therefore load archived tasks before applying group membership.
 */
 export async function listTasksByBranchGroupImpl(store: TaskStore, groupId: string): Promise<Task[]> {
-    const tasks = await store.listTasks({ includeArchived: true, slim: false });
+    const tasks = await store.listTasks({ includeArchived: false, slim: false });
     // Membership filter (incl. legacy synthetic-groupId fallback) is shared with
     // the dashboard list route via `filterTasksByBranchGroup` so semantics can't
     // drift between the two call sites (Fix #8/#9).
@@ -465,8 +465,7 @@ export async function findRecentTasksByContentFingerprintImpl(store: TaskStore,
     one the operator had already filed away. Additive and legacy-seeded.
     */
     if (!includeArchived) {
-      const fingerprintArchivedLanes = await resolveProjectColumnsForRoles(store, ["archived"])
-        .catch(() => undefined);
+      const fingerprintArchivedLanes = ARCHIVED_SENTINEL_LANES;
       /* The fallback stays a literal `ne(..., "archived")` EXPRESSION, not a string in an array: the
          parity gate counts Drizzle predicates by scanning for exactly that shape, and collapsing it
          into data drops the SQL encoding's count while the TS and raw encodings hold — which is the
@@ -504,8 +503,11 @@ export async function findRecentTasksBySourceParentTaskIdImpl(
     const layer = store.asyncLayer!;
   /* FNXC:WorkflowResolvedColumns 2026-07-31-23:59: LANE — recent LIVE siblings; a finished sibling is
      not a candidate. Additive and legacy-seeded, so an unconverted board is unchanged. */
-  const siblingFinishedLanes = await resolveProjectColumnsForRoles(store, ["complete", "archived"])
+  const resolvedSiblingCompleteLanes = await resolveProjectColumnsForRoles(store, ["complete"])
     .catch(() => undefined);
+  const siblingFinishedLanes = resolvedSiblingCompleteLanes
+    ? new Set([...resolvedSiblingCompleteLanes, ...ARCHIVED_SENTINEL_LANES])
+    : undefined;
   const siblingFinishedExclusions = siblingFinishedLanes && siblingFinishedLanes.size > 0
     ? [...siblingFinishedLanes].map((lane) => ne(schema.project.tasks.column, lane))
     : [ne(schema.project.tasks.column, "archived"), ne(schema.project.tasks.column, "done")];
@@ -535,7 +537,7 @@ export async function clearNearDuplicateReferencesToFailSoftImpl(store: TaskStor
 
 export async function getTasksByAssignedAgentImpl(store: TaskStore,
     agentId: string,
-    options?: { pausedOnly?: boolean; excludeArchived?: boolean },
+    options?: { pausedOnly?: boolean },
   ): Promise<Task[]> {
     /*
      * FNXC:SqliteFinalRemoval 2026-06-25:
@@ -547,31 +549,7 @@ export async function getTasksByAssignedAgentImpl(store: TaskStore,
       if (options?.pausedOnly && !task.paused) return false;
       return true;
     });
-    if (options?.excludeArchived !== true) return assigned;
-    /*
-    FNXC:WorkflowLifecycleColumns 2026-07-31-13:40:
-    `excludeArchived` asks each card's OWN workflow, not the literal id.
-
-    Found by auditing an unwired optional parameter one level up: `rankAssignedTasksForWakeDelta`
-    gained a resolved terminal answer that no caller passed, and reading the caller showed the real
-    gap was HERE — on a renamed board `column === "archived"` matched nothing, so archived cards were
-    returned as open assigned work and the Wake Delta inventory asked a coordinator to unblock or
-    reassign tasks that had already been archived.
-
-    That is the fourth unwired parameter in this sweep whose CALLER held the larger defect.
-
-    Resolution runs only over the rows that already matched `agentId` — a handful — not the whole
-    board, and shares one IR cache. A card whose workflow will not resolve keeps the literal.
-    */
-    const archivedIrCache = new Map<string, WorkflowIr>();
-    const live: Task[] = [];
-    for (const task of assigned) {
-      const lanes = await resolveTaskLifecycleColumns(store, task.id, archivedIrCache).catch(() => undefined);
-      /* DELIBERATE-LITERAL — the unresolvable-workflow default, reviewed 2026-07-31-13:40. */
-      const isArchived = lanes === undefined ? task.column === "archived" : task.column === lanes.archived;
-      if (!isArchived) live.push(task);
-    }
-    return live;
+    return assigned;
 }
 
 export function resolveWorkflowMoveActorImpl(store: TaskStore,

@@ -11,6 +11,7 @@ import {readFile} from "node:fs/promises";
 import {join} from "node:path";
 import {existsSync, statSync} from "node:fs";
 import type {Task, TaskDetail, ColumnId, ArchivedTaskEntry, TaskVerificationRequest, TaskVerificationResultSummary, TaskVerificationStatus, TaskRecommendation, TaskRecommendationListItem, TaskRecommendationListPage} from "../types.js";
+import type { TaskColumnSortMode } from "../tasks/task-priority.js";
 import * as schema from "../postgres/schema/index.js";
 import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import "../builtin-traits.js";
@@ -31,7 +32,7 @@ import {computeRetrySummary} from "../tasks/retry-summary.js";
 // FNXC:TaskLookup404 2026-07-26-11:20: typed miss signal so API boundaries can
 // answer 404 instead of 500 (see TaskNotFoundError in task-store/errors.ts).
 import {TaskNotFoundError} from "../task-store/errors.js";
-import { resolveProjectColumnsForRoles } from "../project-lane-vocabulary.js";
+import { ARCHIVED_SENTINEL_LANES, resolveProjectColumnsForRoles } from "../project-lane-vocabulary.js";
 import { taskProjectScope } from "../postgres/data-layer.js";
 
 /** Merge storage tiers while preserving primary-source authority and order. */
@@ -128,10 +129,9 @@ function hasFreshAgentLogActivitySinceTaskUpdate(
 }
 
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
-import {readTaskRow, readLiveTaskRows, readTaskRowByProposalClaimId, readTaskRowsBySourceLineage} from "./async/async-persistence.js";
+import {countLiveTasks, readTaskRow, readLiveTaskRows, readTaskRowByProposalClaimId, readTaskRowsBySourceLineage} from "./async/async-persistence.js";
 import {searchTasksTsvector, searchTasksLike} from "./async/async-search.js";
 import {
-  getArchivedTask,
   listArchivedTasks as listArchivedTaskEntries,
   listArchivedTasksByCreatedOrder,
   searchArchivedTasks,
@@ -228,26 +228,11 @@ export async function getTaskImpl(store: TaskStore, id: string, options?: { acti
       });
       if (!pgRow) {
         /*
-        FNXC:PostgresArchiveReads 2026-07-14-17:09:
-        Archive is cold storage, not deletion from the public read model. Task detail must fall back to the project-scoped archive snapshot so an archived card remains inspectable after its live row is tombstoned.
+        FNXC:TaskLookup404 2026-07-26-11:20:
+        Missing and soft-deleted tasks are absent from the live task-detail model. Historical snapshots
+        remain internal migration/forensic records and cannot resurrect a deleted card through getTask.
         */
-        const archived = await getArchivedTask(layer.db, id, layer.projectId);
-        if (!archived) {
-          /*
-          FNXC:TaskLookup404 2026-07-26-11:20:
-          Backend/Postgres miss. Throw the typed TaskNotFoundError (message kept
-          byte-identical to the legacy `Task ${id} not found` string) so route
-          catches can map it to 404. Nothing on this path sets an errno `code`,
-          so the routes' legacy ENOENT check never fired and every unknown task
-          id 500'd.
-          */
-          throw new TaskNotFoundError(id);
-        }
-        const archivedTask = store.archiveEntryToTask(archived, false);
-        return {
-          ...archivedTask,
-          prompt: archived.prompt ?? store.generatePromptFromArchiveEntry(archived),
-        };
+        throw new TaskNotFoundError(id);
       }
       const task = store.rowToTask(store.pgRowToTaskRow(pgRow));
       const now = Date.now();
@@ -342,14 +327,45 @@ export async function getTaskImpl(store: TaskStore, id: string, options?: { acti
 });
   }
 
-export async function listTasksImpl(store: TaskStore, options?: { limit?: number; offset?: number; /** When false, exclude tasks in the `archived` column. Default: true (backward compatible). */ includeArchived?: boolean; /** When true, omit heavy fields (log, comments, steps, workflowStepResults, steeringComments) * from each row to make list responses cheap for board-style consumers. Detail fields default * to empty arrays in the returned Task objects; use `getTask(id)` to load full data. */ slim?: boolean; /** Restrict to a single column (e.g. 'in-review' for the auto-merge sweep). * Widened to {@link ColumnId} (#1403) so custom-column filters are accepted. */ column?: ColumnId; /** Opt-in startup-only memo for repeated slim reads during boot choreography. */ startupMemo?: boolean; /** Forensic read: surface soft-deleted tasks (deletedAt IS NOT NULL). * VAL-DATA-006 — only admin/forensic surfaces should set this; live readers * must leave it unset so tombstoned tasks stay off the board (VAL-DATA-005). */ includeDeleted?: boolean; }): Promise<Task[]> {
-    const includeArchived = options?.includeArchived ?? true;
+export interface ListTasksOptions {
+  limit?: number;
+  offset?: number;
+  /** Historical compatibility snapshots participate only when explicitly requested. */
+  includeArchived?: boolean;
+  /** Omit heavy detail fields for board-style consumers. */
+  slim?: boolean;
+  /** Restrict to one or several custom-capable column ids. */
+  column?: ColumnId;
+  columns?: readonly ColumnId[];
+  /** Exclude one or several custom-capable column ids. */
+  excludeColumns?: readonly ColumnId[];
+  /** Select the SQL page by creation or latest completion-lane entry. */
+  sort?: "created-asc" | "completion-desc" | TaskColumnSortMode;
+  startupMemo?: boolean;
+  /** Forensic-only: include soft-deleted rows. */
+  includeDeleted?: boolean;
+}
+
+export async function listTasksImpl(store: TaskStore, options?: ListTasksOptions): Promise<Task[]> {
+    /*
+    FNXC:TaskArchiveRemoval 2026-09-04-18:25:
+    Ordinary task reads are live-only by default. Cold archive snapshots remain available solely to
+    explicit migration and forensic callers; an omitted compatibility flag must never resurrect
+    historical rows into schedulers, APIs, or workflow scans.
+    */
+    const includeArchived = options?.includeArchived ?? false;
     const slim = options?.slim ?? false;
     const columnFilter = options?.column;
     const startupMemoEnabled = options?.startupMemo ?? (!store.isWatching && slim);
 
     if (startupMemoEnabled && slim && options?.limit === undefined && options?.offset === undefined) {
-      const memoKey = `${includeArchived ? "all" : "active"}:${columnFilter ?? "*"}`;
+      const memoKey = [
+        includeArchived ? "all" : "active",
+        columnFilter ?? "*",
+        options?.columns?.join(",") ?? "*",
+        options?.excludeColumns?.join(",") ?? "*",
+        options?.sort ?? "created-asc",
+      ].join(":");
       const now = Date.now();
       const cached = store.startupSlimListMemo.get(memoKey);
       if (cached && cached.expiresAt > now) {
@@ -396,24 +412,15 @@ export async function listTasksImpl(store: TaskStore, options?: { limit?: number
     const paginationOffset = Math.max(0, options?.offset ?? 0);
     const paginationLimit = options?.limit !== undefined ? Math.max(0, options.limit) : undefined;
     /*
-    FNXC:PostgresArchiveReads 2026-07-14-17:09:
-    Pagination belongs to the composed active-plus-archive result. When cold storage participates, fetch both sources before sorting, deduplicating, and slicing; paginating only project.tasks can make archived rows unreachable or shift them onto the wrong page.
+    FNXC:TaskArchiveRemoval 2026-09-04-18:25 DELIBERATE-LITERAL:
+    Explicit migration/forensic reads compose live rows with cold snapshots before global pagination.
+    A column filter admits cold storage only when it names the historical sentinel; no workflow
+    archive role participates.
     */
-    /*
-    FNXC:WorkflowResolvedColumns 2026-07-31-14:10 (fleet — reads.ts cluster):
-    "IS THE CALLER FILTERING TO THE ARCHIVE LANE?" — a role question about the FILTER, not a task.
-
-    Cold storage holds archived rows. Against the literal, a caller filtering to a renamed archive
-    lane took this branch as false, so cold storage was skipped and the filtered view returned only
-    whatever archived rows still sat in `project.tasks` — a short list presented as the whole archive.
-
-    `resolveProjectColumnsForRoles` seeds the legacy id before adding resolved ones, so an unconverted
-    board is byte-identical and a resolution failure keeps the previous answer.
-    */
-    const archivedFilterLanes = await resolveProjectColumnsForRoles(store, ["archived"]).catch(() => undefined);
-    const columnFilterIsArchive = columnFilter !== undefined
-      && (archivedFilterLanes && archivedFilterLanes.size > 0 ? archivedFilterLanes : LEGACY_ARCHIVE_LANES).has(columnFilter);
-    const includeColdStorage = includeArchived && (!columnFilter || columnFilterIsArchive);
+    const historicalSentinels = ARCHIVED_SENTINEL_LANES;
+    const columnFilterIsHistorical = columnFilter !== undefined
+      && (historicalSentinels && historicalSentinels.size > 0 ? historicalSentinels : LEGACY_ARCHIVE_LANES).has(columnFilter);
+    const includeColdStorage = includeArchived && (!columnFilter || columnFilterIsHistorical);
     const boundedMergedPrefix = includeColdStorage && paginationLimit !== undefined
       ? paginationOffset + paginationLimit
       : undefined;
@@ -422,7 +429,10 @@ export async function listTasksImpl(store: TaskStore, options?: { limit?: number
     const filteredRows = await readLiveTaskRows(layer, {
       includeDeleted: options?.includeDeleted,
       column: columnFilter ?? undefined,
-      excludeColumn: !columnFilter && !includeArchived ? "archived" : undefined,
+      columns: options?.columns,
+      excludeColumn: !columnFilter && !options?.columns && !options?.excludeColumns && !includeArchived ? "archived" : undefined,
+      excludeColumns: options?.excludeColumns,
+      sort: options?.sort,
       ...(boundedMergedPrefix !== undefined
         ? { limit: boundedMergedPrefix, offset: 0 }
         : sqlPaginated
@@ -554,6 +564,11 @@ export async function listTasksImpl(store: TaskStore, options?: { limit?: number
     FNXC:PostgresArchiveReadPerformance 2026-07-14-17:50:
     A global page ending at K can only contain rows from each source's first K entries. Bound both SQL reads to K, then apply live-ID authority and the exact shared comparator before slicing. Unbounded callers retain the complete-result contract.
     */
+    if (!includeColdStorage && (
+      options?.sort === "completion-desc"
+      || options?.sort === "completion-date-desc"
+      || options?.sort === "task-id-desc"
+    )) return tasks;
     const archiveEntries = includeColdStorage
       ? boundedMergedPrefix !== undefined
         ? await listArchivedTasksByCreatedOrder(layer.db, boundedMergedPrefix, layer.projectId)
@@ -574,6 +589,46 @@ export async function listTasksImpl(store: TaskStore, options?: { limit?: number
     if (!includeColdStorage) return sorted;
     if (paginationLimit === undefined) return sorted.slice(paginationOffset);
     return sorted.slice(paginationOffset, paginationOffset + paginationLimit);
+}
+
+/**
+ * Return one bounded page from every workflow column carrying the `complete`
+ * trait, along with an exact project-scoped total.
+ *
+ * FNXC:DonePagination 2026-09-04-10:36:
+ * Done is the only visible task-history lane after archive removal. Resolve all
+ * configured completion columns, select the newest 50 rows in SQL, and count
+ * all matching live rows separately so the header remains exact while the DOM
+ * and network payload stay bounded.
+ *
+ * FNXC:DonePagination 2026-09-04-19:28:
+ * Apply the requested completion-date or task-id order before LIMIT/OFFSET. Every page in one
+ * browser sort session therefore shares the same deterministic SQL order and textual id tie-break.
+ */
+export async function listCompletedTasksImpl(
+  store: TaskStore,
+  options?: { limit?: number; offset?: number; slim?: boolean; sort?: TaskColumnSortMode },
+): Promise<{ tasks: Task[]; total: number; hasMore: boolean }> {
+  const rawLimit = options?.limit ?? 50;
+  const limit = Math.min(500, Math.max(1, Math.trunc(rawLimit) || 50));
+  const offset = Math.max(0, Math.trunc(options?.offset ?? 0) || 0);
+  const completeColumns = [...await resolveProjectColumnsForRoles(store, ["complete"])] as ColumnId[];
+  const layer = store.asyncLayer;
+  if (!layer) throw new Error("Completed-task pagination requires the async task backend");
+
+  const [total, tasks] = await Promise.all([
+    countLiveTasks(layer, { columns: completeColumns }),
+    store.listTasks({
+      columns: completeColumns,
+      includeArchived: false,
+      limit,
+      offset,
+      slim: options?.slim ?? true,
+      sort: options?.sort ?? "completion-date-desc",
+      startupMemo: false,
+    }),
+  ]);
+  return { tasks, total, hasMore: offset + tasks.length < total };
 }
 
 export async function listTasksModifiedSinceImpl(store: TaskStore, since: string, limit?: number, opts?: { includeArchived?: boolean },): Promise<{ tasks: Task[]; hasMore: boolean }> {
@@ -614,24 +669,14 @@ export async function listTasksModifiedSinceImpl(store: TaskStore, since: string
     ];
     if (!includeArchived) {
       /*
-      FNXC:WorkflowResolvedColumns 2026-07-31-09:10:
-      ARCHIVED ROWS LEAKED INTO THE LIVE STREAM ON A RENAMED BOARD.
-
-      This filter backs the SSE watcher and modified-since polling — the incremental feed the
-      dashboard applies to its live task list. It excluded the literal `archived`, so on a board
-      whose archive lane is named anything else the predicate matched EVERY row and excluded
-      nothing: archived cards arrived in the live feed and reappeared on the board.
-
-      Nothing errors, and a full refetch filters archived rows by another path, so the symptom is
-      archived work that comes back until the next reload.
-
-      `resolveProjectColumnsForRoles` seeds the legacy ids before adding resolved ones, so the set is
-      never empty and an unconverted board excludes exactly `archived` as before. The fallback covers
-      a resolution failure, where excluding nothing would be worse than excluding the legacy id.
+      FNXC:TaskArchiveRemoval 2026-09-04-18:25 DELIBERATE-LITERAL:
+      This filter backs the SSE watcher and modified-since polling, so it must never publish the
+      historical `archived` sentinel into the dashboard's live task list. Archive is no longer a
+      workflow role; the fixed sentinel exclusion is migration compatibility, not trait resolution.
       */
-      const archivedColumns = await resolveProjectColumnsForRoles(store, ["archived"]).catch(() => undefined);
-      if (archivedColumns && archivedColumns.size > 0) {
-        conditions.push(notInArray(schema.project.tasks.column, [...archivedColumns]));
+      const historicalSentinels = ARCHIVED_SENTINEL_LANES;
+      if (historicalSentinels && historicalSentinels.size > 0) {
+        conditions.push(notInArray(schema.project.tasks.column, [...historicalSentinels]));
       } else {
         conditions.push(sql`${schema.project.tasks.column} != 'archived'`);
       }
@@ -786,7 +831,7 @@ export async function searchTasksImpl(store: TaskStore, query: string, options?:
     const limit = options?.limit;
     const offset = options?.offset ?? 0;
     if (limit !== undefined && Math.max(0, limit) === 0) return [];
-    const includeArchived = options?.includeArchived ?? true;
+    const includeArchived = options?.includeArchived ?? false;
     const slim = options?.slim ?? false;
     // The tsvector path is the primary search (GIN-backed). The LIKE path is
     // a fallback if the tsvector query returns no results (e.g., if the search
@@ -798,21 +843,15 @@ export async function searchTasksImpl(store: TaskStore, query: string, options?:
     const sourceOffset = includeArchived ? 0 : offset;
     /*
     FNXC:WorkflowResolvedColumns 2026-07-31-23:59:
-    Search excludes the board's OWN archive lanes, not the `archived` id. Against the literal, a card
-    filed away on a renamed board still surfaced in every live search — including the CREATE-time
-    near-duplicate check, which would then reject a new task as a duplicate of one the operator had
-    already archived.
-
-    Resolved once here and threaded into both search paths. `resolveArchivedLanes` returns undefined
-    on an unreadable workflow list, and `liveSearchPredicate` falls back to the literal, so an
-    unconverted board is byte-identical.
+    Live search excludes the stable historical sentinel and soft-deleted rows. Internal forensic
+    reads may explicitly compose cold snapshots, but no workflow archive role participates.
     */
-    const searchArchivedLanes = await resolveProjectColumnsForRoles(store, ["archived"]).catch(() => undefined);
+    const searchHistoricalSentinels = ARCHIVED_SENTINEL_LANES;
     let pgRows = await searchTasksTsvector(layer.db, trimmedQuery, {
       limit: sourceLimit,
       offset: sourceOffset,
       includeArchived,
-      archivedColumns: searchArchivedLanes,
+      archivedColumns: searchHistoricalSentinels,
       // FNXC:MultiProjectIsolation 2026-07-10: scope search to the bound project
       // (load-bearing for the CREATE-time near-duplicate check via searchTasks).
       projectId: layer.projectId,
@@ -822,7 +861,7 @@ export async function searchTasksImpl(store: TaskStore, query: string, options?:
         limit: sourceLimit,
         offset: sourceOffset,
         includeArchived,
-        archivedColumns: searchArchivedLanes,
+        archivedColumns: searchHistoricalSentinels,
         projectId: layer.projectId,
       });
     }

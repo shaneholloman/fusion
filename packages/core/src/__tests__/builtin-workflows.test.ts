@@ -628,7 +628,6 @@ describe("built-in workflows", () => {
           { id: "in-progress", traits: ["wip", "abort-on-exit", "timing"] },
           { id: "in-review", traits: ["merge-blocker", "human-review", "stall-detection", "merge"] },
           { id: "done", traits: ["complete"] },
-          { id: "archived", traits: ["archived"] },
         ],
       ],
       [
@@ -639,7 +638,6 @@ describe("built-in workflows", () => {
           { id: "drafting", traits: ["wip", "abort-on-exit", "timing"] },
           { id: "editorial-review", traits: ["merge-blocker", "human-review", "stall-detection", "merge"] },
           { id: "published", traits: ["complete"] },
-          { id: "archived", traits: ["archived"] },
         ],
       ],
       [
@@ -652,7 +650,6 @@ describe("built-in workflows", () => {
           { id: "in-progress", traits: ["wip", "abort-on-exit", "timing"] },
           { id: "in-review", traits: ["merge-blocker", "human-review", "stall-detection", "merge"] },
           { id: "done", traits: ["complete"] },
-          { id: "archived", traits: ["archived"] },
         ],
       ],
       [
@@ -663,7 +660,6 @@ describe("built-in workflows", () => {
           { id: "in-progress", traits: ["wip", "abort-on-exit", "timing"] },
           { id: "in-review", traits: ["merge-blocker", "human-review", "stall-detection", "merge"] },
           { id: "done", traits: ["complete"] },
-          { id: "archived", traits: ["archived"] },
         ],
       ],
       [
@@ -675,7 +671,6 @@ describe("built-in workflows", () => {
           { id: "enrichment", traits: ["timing"] },
           { id: "outreach", traits: ["human-review", "stall-detection"] },
           { id: "converted", traits: ["complete"] },
-          { id: "archived", traits: ["archived"] },
         ],
       ],
       [
@@ -685,7 +680,6 @@ describe("built-in workflows", () => {
           { id: "in-progress", traits: ["wip", "timing"] },
           { id: "await-review", traits: ["merge-blocker", "stall-detection"] },
           { id: "done", traits: ["complete"] },
-          { id: "archived", traits: ["archived"] },
         ],
       ],
     ]);
@@ -710,7 +704,7 @@ describe("built-in workflows", () => {
 
     /*
     FNXC:MergedPlanningColumn 2026-07-29-12:10 (U11):
-    Five columns, not the legacy six. This is the assertion that would have caught the merge
+    Four columns, not the legacy split lifecycle. This is the assertion that would have caught the merge
     landing on the wrong constant, so it is updated rather than deleted: it still pins the exact
     column set and trait order of the OPERATOR'S default board.
     */
@@ -719,14 +713,12 @@ describe("built-in workflows", () => {
       "in-progress",
       "in-review",
       "done",
-      "archived",
     ]);
     expect(ir.columns.map((column) => column.traits.map((trait) => trait.trait))).toEqual([
       ["intake", "hold", "reset-on-entry"],
       ["wip", "abort-on-exit", "timing"],
       ["merge-blocker", "human-review", "stall-detection", "merge"],
       ["complete"],
-      ["archived"],
     ]);
 
     const byId = new Map(ir.nodes.map((node) => [node.id, node]));
@@ -826,7 +818,6 @@ describe("built-in workflows", () => {
       "drafting",
       "editorial-review",
       "published",
-      "archived",
     ]);
 
     const editorialReview = ir.columns.find((column) => column.id === "editorial-review");

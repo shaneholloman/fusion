@@ -45,7 +45,7 @@ const TASK_ARTIFACT_CATEGORY_ICONS: Record<ArtifactCategory, typeof ImageIcon> =
 };
 
 /** Board-workflow column traits, indexed by task id — the shape App already builds for the footer. */
-export type DocumentsColumnFlags = Pick<ExecutorColumnFlags, "complete" | "archived" | "intake" | "hold">;
+export type DocumentsColumnFlags = Pick<ExecutorColumnFlags, "complete" | "intake" | "hold">;
 
 export interface DocumentsViewProps {
   projectId?: string;
@@ -81,22 +81,20 @@ function formatFileSize(bytes: number): string {
 /*
 FNXC:WorkflowLifecycleColumns 2026-07-30-12:05 (Phase C convergence — DocumentsView.tsx):
 
-WHAT THE GUARD MEANT, checked rather than swapped: the four dots are LIFECYCLE ROLES —
-complete, archived, pre-implementation (waiting), and everything else (working). Only the
+WHAT THE GUARD MEANT, checked rather than swapped: the dots are LIFECYCLE ROLES —
+complete, pre-implementation (waiting), and everything else (working). Only the
 pre-implementation arm named columns, and it named the default lineage's two, so on a renamed
 board a queued card showed the "working" dot.
 
 FLAGS FIRST, legacy names only with NO BASIS. `flags` are the board-workflow column traits the
 dashboard already threads to the footer (`ExecutorColumnFlags`); when present they decide, and
-they cover renamed and custom columns. When ABSENT there is nothing to resolve from — the
-documents list spans archived and historical tasks whose columns are not in the current board
-map — and "not pre-implementation" would be as much a guess as the legacy pair. Same rule as
+they cover renamed and custom columns. When ABSENT there is nothing to resolve from, and
+"not pre-implementation" would be as much a guess as the legacy pair. Same rule as
 `live-agent-count.ts`'s no-flags fallback, and same reason: an invented answer moves what the
 operator sees.
 */
 export function getTaskColumnStatusDotClass(taskColumn: string, flags?: DocumentsColumnFlags): string {
   if (flags) {
-    if (flags.archived) return "status-dot status-dot--offline";
     if (flags.complete) return "status-dot status-dot--online";
     if (flags.intake || flags.hold) return "status-dot status-dot--pending";
     return "status-dot status-dot--connecting";
@@ -105,8 +103,6 @@ export function getTaskColumnStatusDotClass(taskColumn: string, flags?: Document
      (`if (flags) { ... }`); these lines answer only when a task has no flags at all, and deleting
      them makes every such row render the neutral "connecting" dot. */
   if (taskColumn === "done") return "status-dot status-dot--online";
-  /* DELIBERATE-LITERAL — same no-metadata fallback as the line above. */
-  if (taskColumn === "archived") return "status-dot status-dot--offline";
   if (LEGACY_PRE_IMPLEMENTATION_COLUMNS.has(taskColumn)) return "status-dot status-dot--pending";
   return "status-dot status-dot--connecting";
 }

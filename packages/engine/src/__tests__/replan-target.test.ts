@@ -63,7 +63,6 @@ const planningGuardCases: PlanningGuardCase[] = [
   { label: "in-progress task", task: { column: "in-progress", steps: [] }, stillPlanning: false },
   { label: "in-review task", task: { column: "in-review", steps: [] }, stillPlanning: false },
   { label: "completed task", task: { column: "done", steps: [] }, stillPlanning: false },
-  { label: "archived task", task: { column: "archived", steps: [] }, stillPlanning: false },
 
   // A triage card sits in the planner column by definition — nothing executes out of triage,
   // so steps materialized by its previous planning pass must never read as advancement.

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { archivedColumnsForTask } from "../task-lifecycle-lanes.js";
 import { createReadStream } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -294,10 +293,10 @@ export function registerChatRoutes(ctx: ApiRoutesContext, deps: ChatRouteDeps): 
   Task planner Chat uses a synthetic task-scoped chat target (`task-planner:<taskId>`) so the dashboard can persist/resume a conversation without binding it to an executor/reviewer agent or the Activity steering-comment pipeline. The route validates the task in the scoped project store and stores the current Chat target on the session.
 
   FNXC:TaskDetailPlannerChatRetention 2026-06-30-18:45:
-  Planner chats that already have user interaction remain available when a task reaches done, and archived-task cleanup removes existing task-planner sessions through ChatStore deletion so archived tasks stop retaining task-local planner context.
+  Planner chats with user interaction remain available after a task reaches Complete. Soft-deleted tasks are absent from task lookup and cannot open new task-planner sessions.
 
   FNXC:TaskDetailPlannerChat 2026-07-01-21:40:
-  Completed tasks may start a task-detail planner Chat after the fact so operators can ask retrospective questions and request a refinement from the completed source task. Archived tasks remain non-startable, and common Chat feed visibility is still controlled only by the global task-chat filtering setting below.
+  Completed tasks may start a task-detail planner Chat after the fact so operators can ask retrospective questions and request a refinement. Deleted tasks remain non-startable; common Chat feed visibility is controlled by the global task-chat filtering setting below.
   */
   router.post("/chat/task-planner/:taskId/session", rateLimit(RATE_LIMITS.mutation), async (req, res) => {
     try {
@@ -359,15 +358,6 @@ export function registerChatRoutes(ctx: ApiRoutesContext, deps: ChatRouteDeps): 
             ? await chatStore.updateSession(existing.id, updates)
             : existing;
           return { created: false, session };
-        }
-
-        /*
-        FNXC:WorkflowResolvedColumns 2026-07-30-06:50 (batch-core):
-        Planner chat is refused for archived tasks. Keyed on the literal, a renamed board started
-        planner sessions against archived cards, whose rows the archive treats as immutable.
-        */
-        if ((await archivedColumnsForTask(scopedStore, task.id)).has(task.column)) {
-          throw badRequest(`Task ${task.id} is archived; planner chat cannot be started for archived tasks`);
         }
 
         const session = await chatStore.createSession({

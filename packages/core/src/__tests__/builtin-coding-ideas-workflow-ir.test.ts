@@ -26,7 +26,7 @@ describe("builtin coding-ideas workflow ir", () => {
     expect(workflow!.ir).toBe(BUILTIN_CODING_IDEAS_WORKFLOW_IR);
   });
 
-  it("declares the five-stage Ideas → Todo → In-progress → In-review → Done board shape plus archived", () => {
+  it("declares the five-stage Ideas → Todo → In-progress → In-review → Done board shape", () => {
     const ir = BUILTIN_CODING_IDEAS_WORKFLOW_IR as WorkflowIrV2;
     expect(ir.columns.map((c) => c.id)).toEqual([
       "ideas",
@@ -34,7 +34,6 @@ describe("builtin coding-ideas workflow ir", () => {
       "in-progress",
       "in-review",
       "done",
-      "archived",
     ]);
   });
 

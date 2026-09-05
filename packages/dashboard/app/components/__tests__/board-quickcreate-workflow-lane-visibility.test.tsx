@@ -81,7 +81,6 @@ const DEFAULT_WORKFLOW = {
     { id: "triage", name: "Triage", flags: { intake: true } },
     { id: "todo", name: "Todo", flags: { hold: true } },
     { id: "done", name: "Done", flags: { complete: true } },
-    { id: "archived", name: "Archived", flags: { archived: true } },
   ],
 };
 
@@ -106,7 +105,6 @@ const CODING_IDEAS_WORKFLOW = {
     { id: "ideas", name: "Ideas", flags: { intake: true } },
     { id: "todo", name: "Todo", flags: { hold: true } },
     { id: "done", name: "Done", flags: { complete: true } },
-    { id: "archived", name: "Archived", flags: { archived: true } },
   ],
 };
 

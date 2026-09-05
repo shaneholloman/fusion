@@ -295,11 +295,10 @@ These fields are managed by the engine and cannot be directly edited:
 
 ### Stale Task Link Sanitization
 
-The `taskId` field is suppressed in API responses when the linked task is in a terminal state (`done` or `archived`). This prevents stale "working on" UI indicators in the Agents dashboard for agents whose task has already completed.
+The `taskId` field is suppressed in API responses when the linked task reaches its workflow's Complete column or is soft-deleted. This prevents stale "working on" UI indicators for agents whose assignment is no longer active.
 
-**Terminal task statuses:**
-- `done` — Task completed successfully
-- `archived` — Task archived
+**Terminal task state:**
+- Any column carrying the workflow `complete` trait (`done` in the built-in fallback)
 
 **Affected API endpoints:**
 - `GET /api/agents` — `taskId` is omitted from agents with terminal linked tasks

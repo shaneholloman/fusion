@@ -297,7 +297,7 @@ const EXPECTATIONS: BuiltinExpectation[] = [
         /*
     FNXC:WorkflowResolvedColumns 2026-07-31-01:35:
     U11 merged the two pre-implementation columns for this lineage: its declared columns are now
-    `todo,in-progress,in-review,done,archived` with NO `triage`. So the card ENTERS at `todo` and the
+    `todo,in-progress,in-review,done` with NO `triage`. So the card ENTERS at `todo` and the
     former `triage -> todo` graph hop does not exist — there is no longer a boundary to cross.
     Verified by resolving the built-in IR and reading its column ids, not inferred from the failure.
     */
@@ -357,10 +357,6 @@ const EXPECTATIONS: BuiltinExpectation[] = [
       ["triage", "todo", "graph"],
       ["todo", "in-progress", "scheduler"],
       ["in-progress", "in-review", "graph"],
-      // FNXC:WorkspaceReviewSeal 2026-08-21-19:39: completion summary precedes Code Review,
-      // so legacy Coding re-enters execution before the final sealed review episode.
-      ["in-review", "in-progress", "graph"],
-      ["in-progress", "in-review", "graph"],
       ["in-review", "done", "graph"],
     ],
     finalColumn: "done",
@@ -371,7 +367,7 @@ const EXPECTATIONS: BuiltinExpectation[] = [
         /*
     FNXC:WorkflowResolvedColumns 2026-07-31-01:35:
     U11 merged the two pre-implementation columns for this lineage: its declared columns are now
-    `todo,in-progress,in-review,done,archived` with NO `triage`. So the card ENTERS at `todo` and the
+    `todo,in-progress,in-review,done` with NO `triage`. So the card ENTERS at `todo` and the
     former `triage -> todo` graph hop does not exist — there is no longer a boundary to cross.
     Verified by resolving the built-in IR and reading its column ids, not inferred from the failure.
     */
@@ -493,7 +489,7 @@ const EXPECTATIONS: BuiltinExpectation[] = [
         /*
     FNXC:WorkflowResolvedColumns 2026-07-31-01:35:
     U11 merged the two pre-implementation columns for this lineage: its declared columns are now
-    `todo,in-progress,in-review,done,archived` with NO `triage`. So the card ENTERS at `todo` and the
+    `todo,in-progress,in-review,done` with NO `triage`. So the card ENTERS at `todo` and the
     former `triage -> todo` graph hop does not exist — there is no longer a boundary to cross.
     Verified by resolving the built-in IR and reading its column ids, not inferred from the failure.
     */
