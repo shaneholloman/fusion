@@ -161,6 +161,41 @@ pgDescribe("TaskStore.bypassFailedPreMergeReviewStep", () => {
     expect(result?.verdict).toBeUndefined();
   });
 
+  /*
+  FNXC:ReviewLaneBypass 2026-09-05-23:08:
+  FN-295: a gate archived by ANOTHER gate's remediation blocks the merge while `skipped`, so the
+  failed-row-only selection left the card with no exit at all. The waiver must also erase the archive
+  stamp, which `evaluatePreMergeApprovals` treats as an unconditional veto — otherwise the operator's
+  decision is recorded and the door stays shut.
+  */
+  it("bypasses a required gate archived by another gate's remediation", async () => {
+    const archived = failedStep({
+      workflowStepId: "plan-review",
+      workflowStepName: "Plan Review",
+      status: "skipped",
+      reviewKind: "plan",
+      remediationArchivedAt: "2026-09-04T19:28:37.579Z",
+      remediationArchivedFromStatus: "failed",
+    });
+    const approvedCodeReview = failedStep({ status: "passed", verdict: "APPROVE", reviewKind: "code" });
+    await seedInReviewTask("FN-BYP-ARCHIVED", { workflowStepResults: [archived, approvedCodeReview], workflowId: "builtin:coding" });
+
+    const updated = await store().bypassFailedPreMergeReviewStep("FN-BYP-ARCHIVED", {
+      reason: "gate archived as collateral of a code-review remediation",
+      actor: "operator-archived",
+    });
+
+    const result = updated.workflowStepResults?.find((entry) => entry.workflowStepId === "plan-review");
+    expect(result).toMatchObject({
+      status: "skipped",
+      bypassedBy: "operator-archived",
+      bypassedFromStatus: "skipped",
+    });
+    expect(result?.verdict).toBeUndefined();
+    expect(result?.remediationArchivedAt).toBeUndefined();
+    expect(result?.remediationArchivedFromStatus).toBeUndefined();
+  });
+
   it("rejects when there is no failed or enabled resultless pre-merge step", async () => {
     await seedInReviewTask("FN-BYP-005", { workflowStepResults: [failedStep({ status: "passed" })] });
     await store().updateTask("FN-BYP-005", { enabledWorkflowSteps: [] });

@@ -133,7 +133,7 @@ describe("reconcileCollateralArchivedReviewGates", () => {
   it("restores the collateral carrier so the card stops being unrecoverable", async () => {
     const row = task("FN-295");
     expect(getTaskMergeBlocker(row, { requiredPreMergeStepIds: required, mergeContent }))
-      .toBe("task has enabled pre-merge workflow steps without a current approval");
+      .toBe("task has enabled pre-merge workflow steps without a current approval (gate 'plan-review')");
     /* Before: the audited operator bypass has nothing to select — that is the wedge. */
     expect(getLatestFailedPreMergeReviewStep(row)).toBeUndefined();
 
@@ -152,7 +152,7 @@ describe("reconcileCollateralArchivedReviewGates", () => {
     */
     expect(getLatestFailedPreMergeReviewStep(row)).toMatchObject({ workflowStepId: "plan-review", status: "failed" });
     expect(getTaskMergeBlocker(row, { requiredPreMergeStepIds: required, mergeContent }))
-      .toBe("task has enabled pre-merge workflow steps without a current approval");
+      .toBe("task has enabled pre-merge workflow steps without a current approval (gate 'plan-review')");
     expect(row.workflowStepResults?.find((entry) => entry.workflowStepId === "code-review")).toEqual(approvedCodeReview());
     expect(store.logEntry).toHaveBeenCalledWith(row.id, expect.stringContaining("plan-review"), expect.any(String));
 

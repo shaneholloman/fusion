@@ -108,6 +108,7 @@ import { CentralCore } from "./central/central-core.js";
 import { SecretsStore } from "./secrets/secrets-store.js";
 import { getLatestFailedPreMergeReviewStep, findPendingPreMergeStep } from "./merge/task-merge.js";
 import { resolveRequiredPreMergeStepIds } from "./merge/required-pre-merge-steps.js";
+import { evaluatePreMergeApprovals } from "./merge/pre-merge-approval.js";
 import { createLogger } from "./process/logger.js";
 import { type UsageEventInput } from "./tasks/usage-events.js";
 import { assertNotLinkedWorktreeOfExistingProject, assertProjectRootDir } from "./central/project-root-guard.js";
@@ -2481,36 +2482,55 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
       const reviewIrForBypass = failedTarget
         ? undefined
         : await resolveWorkflowIrForTask(this, task.id);
-      const absentStepId = reviewIrForBypass
+      const requiredForBypass = reviewIrForBypass
         ? [...resolveRequiredPreMergeStepIds(reviewIrForBypass, task.enabledWorkflowSteps, task)]
-          .find((workflowStepId) => !results.some((result) => result.workflowStepId === workflowStepId))
+        : [];
+      const absentStepId = requiredForBypass
+        .find((workflowStepId) => !results.some((result) => result.workflowStepId === workflowStepId));
+      /*
+      FNXC:ReviewLaneBypass 2026-09-05-23:08:
+      FN-295: the operator escape must reach EVERY row that holds the merge door shut, not only
+      `status:"failed"`. A required gate can block while `skipped` (archived by another gate's
+      remediation), `advisory_failure`, or `passed` with a non-approving verdict — and in that state the
+      card had no exit at all: the reseed handles only a missing result, the stale-content reroute only
+      a moved fingerprint, and this bypass only a failed row. Measured on FN-295: three review restarts
+      re-ran Code Review and Documentation to APPROVE and the card still could not merge or be waived.
+      A failed row stays the preferred target so the established selection is unchanged where it applied.
+      */
+      const unapprovedTarget = !failedTarget && !absentStepId && requiredForBypass.length > 0
+        ? (() => {
+          const blocked = evaluatePreMergeApprovals(task, { requiredPreMergeStepIds: new Set(requiredForBypass) })
+            .find((approval) => approval.state !== "approved");
+          return blocked ? results.find((result) => result.workflowStepId === blocked.workflowStepId) : undefined;
+        })()
         : undefined;
-      if (!failedTarget && !absentStepId) {
-        // Preserve the established refusal for cards with neither escape target.
+      if (!failedTarget && !absentStepId && !unapprovedTarget) {
+        // Preserve the established refusal for cards with no escape target at all.
         throw new Error(`Cannot bypass review lane for ${id}: no failed pre-merge review step found`);
       }
 
-      const target = failedTarget ?? {
+      const target = failedTarget ?? unapprovedTarget ?? {
         workflowStepId: absentStepId!,
         workflowStepName: absentStepId!,
         phase: "pre-merge" as const,
         status: "absent" as const,
       };
-      const targetIndex = failedTarget ? results.indexOf(failedTarget) : -1;
-      if (failedTarget && targetIndex === -1) {
+      const rowTarget = failedTarget ?? unapprovedTarget;
+      const targetIndex = rowTarget ? results.indexOf(rowTarget) : -1;
+      if (rowTarget && targetIndex === -1) {
         throw new Error(`Cannot bypass review lane for ${id}: failed step result not found`);
       }
 
       const now = new Date().toISOString();
-      const bypassed: import("./types.js").WorkflowStepResult = failedTarget
+      const bypassed: import("./types.js").WorkflowStepResult = rowTarget
         ? {
-          ...failedTarget,
+          ...rowTarget,
           status: "skipped",
           bypassedBy: actor,
           bypassedAt: now,
           bypassReason: reason,
-          bypassedFromStatus: failedTarget.status,
-          bypassedFromVerdict: failedTarget.verdict,
+          bypassedFromStatus: rowTarget.status,
+          bypassedFromVerdict: rowTarget.verdict,
         }
         : {
           workflowStepId: absentStepId!,
@@ -2524,6 +2544,14 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         };
       // A bypass never fabricates a reviewer verdict.
       delete bypassed.verdict;
+      /*
+      FNXC:ReviewLaneBypass 2026-09-05-23:08:
+      An audited human waiver supersedes an automatic remediation archive. Leaving the stamp made the
+      bypass INERT: `evaluatePreMergeApprovals` vetoes any row carrying `remediationArchivedAt`, so the
+      operator's explicit decision was recorded and the merge door stayed shut anyway.
+      */
+      delete bypassed.remediationArchivedAt;
+      delete bypassed.remediationArchivedFromStatus;
 
       const nextResults = [...results];
       if (targetIndex === -1) nextResults.push(bypassed);

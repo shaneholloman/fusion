@@ -493,7 +493,15 @@ export function getTaskMergeBlocker(
   */
   const approval = evaluatePreMergeApprovals(task, options).find((candidate) => candidate.state !== "approved");
   if (approval?.state === "missing") return PRE_MERGE_STEPS_NOT_RUN_BLOCKER;
-  if (approval?.state === "not-approved") return "task has enabled pre-merge workflow steps without a current approval";
+  /*
+  FNXC:PreMergeApproval 2026-09-05-23:08:
+  FN-295: name the gate. The bare sentence sent an operator hunting through three review lanes for the
+  one row without an approval, and the wrong guess cost three full review re-runs. The gate id is the
+  single fact needed to act; every other approval blocker already implies its own remedy.
+  */
+  if (approval?.state === "not-approved") {
+    return `task has enabled pre-merge workflow steps without a current approval (gate '${approval.workflowStepId}')`;
+  }
   if (approval?.state === "stale-content") return "task has a pre-merge approval recorded against different content";
   if (approval?.state === "unprovable-content") return "task has no provable approval for the content being merged";
 
