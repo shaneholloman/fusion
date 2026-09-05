@@ -1380,11 +1380,20 @@ CRITICAL SCOPING RULES — read before doing anything else:
            * routing decision. A finding-less REVISE is non-blocking because it cannot produce
            * remediation; an unclassified open finding remains fail-closed and blocks.
            */
+          /*
+          FNXC:ReviewVerdictAuthority 2026-09-05-22:54:
+          FN-295: a verdict rescued from a MALFORMED payload carries no findings because they could not
+          be parsed. Tell the severity gate so it fails closed instead of reading the empty list as
+          "nothing blocking" — that read turned a REVISE with three `high` findings into an approval and
+          sent the card into execution on a rejected plan.
+          */
+          const findingsUnreadable = verdictRepairResult === "repaired" && (parsed.findings?.length ?? 0) === 0;
           const gated = reviewBlockingSeverity
             ? applyReviewSeverityGate({
               verdict: parsed.verdict,
               findings: parsed.findings,
               threshold: reviewBlockingSeverity,
+              findingsUnreadable,
             })
             : undefined;
           const effectiveVerdict = (gated?.verdict ?? parsed.verdict) as typeof parsed.verdict;
