@@ -54,6 +54,19 @@ vi.mock("../../hooks/useModelsCache", () => ({
   }),
 }));
 
+vi.mock("../../hooks/useVoiceDictation", () => ({
+  useVoiceDictation: () => ({
+    enabled: true,
+    supported: true,
+    state: "idle",
+    partialText: "",
+    finalText: "",
+    error: undefined,
+    start: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue(undefined),
+  }),
+}));
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: mockT,
@@ -2575,6 +2588,50 @@ describe("TaskPlannerChatTab", () => {
       expect(JSON.parse(localStorage.getItem("fusion:chat-pending:chat-planner") ?? "null")).toEqual(["First", "Edited duplicate"]);
       expect(screen.getByTestId("task-planner-chat-pending-force-1")).toHaveAccessibleName(/Force send queued message 2/);
       void streamHandlers;
+    });
+
+    it("keeps planner composition active while a force-send cancellation is pending", async () => {
+      const user = userEvent.setup();
+      const streamHandlers: any[] = [];
+      const cancelDeferred = createDeferred<{ success: boolean; interrupted: boolean }>();
+      mockCancelChatResponse.mockReturnValueOnce(cancelDeferred.promise);
+      mockStreamChatResponse.mockImplementation((_sessionId, _content, handlers) => {
+        streamHandlers.push(handlers);
+        return { close: vi.fn(), isConnected: () => true };
+      });
+
+      renderPlannerChat();
+      await screen.findByTestId("task-planner-chat-empty");
+      await user.click(screen.getByRole("button", { name: /Summarize recent activity/ }));
+      await waitFor(() => expect(streamHandlers).toHaveLength(1));
+
+      const input = screen.getByLabelText("Message task chat");
+      await user.type(input, "Force this queued message");
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(screen.getByTestId("task-planner-chat-pending-force-0")).toBeInTheDocument());
+      await user.click(screen.getByTestId("task-planner-chat-pending-force-0"));
+      await waitFor(() => expect(mockCancelChatResponse).toHaveBeenCalledTimes(1));
+
+      expect(input).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Start voice dictation" })).not.toBeDisabled();
+      expect(screen.getByTestId("chat-thinking-btn")).toBeDisabled();
+      expect(screen.getByTestId("task-planner-chat-pending-edit-0")).toBeDisabled();
+      expect(screen.getByTestId("task-planner-chat-pending-force-0")).toBeDisabled();
+      expect(screen.queryByTestId("chat-attach-btn")).not.toBeInTheDocument();
+
+      await user.type(input, "Typed during planner cancellation");
+      expect(input).toHaveValue("Typed during planner cancellation");
+      expect(screen.getByTestId("chat-send-btn")).not.toBeDisabled();
+      await user.keyboard("{Enter}");
+
+      expect(mockStreamChatResponse).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Typed during planner cancellation")).toBeInTheDocument();
+      expect(input).toHaveValue("");
+
+      cancelDeferred.resolve({ success: true, interrupted: true });
+      await waitFor(() => expect(mockStreamChatResponse).toHaveBeenCalledTimes(2));
+      expect(mockStreamChatResponse.mock.calls[1][1]).toBe("Force this queued message");
+      expect(screen.getByText("Typed during planner cancellation")).toBeInTheDocument();
     });
 
     it("waits for durable cancellation and history reconciliation before force dispatching a non-front entry", async () => {

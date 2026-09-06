@@ -1387,7 +1387,7 @@ export function TaskPlannerChatTab({ task, columnFlags, projectId, active, expan
     void sendMessage();
   }, [showCommandMenu, slashMenuEntries, highlightedCommandIndex, handleCommandMenuSelect, handleSnippetMenuSelect, sendMessage]);
 
-  const canSend = draft.trim().length > 0 && composerState !== "sending" && !queueActionPending;
+  const canSend = draft.trim().length > 0 && composerState !== "sending";
   const showEmptyState = historyLoaded && !loading && !error && messages.length === 0;
   const questionRenderStates = useMemo(() => buildPlannerQuestionRenderStates(messages), [messages]);
   const starterPrompts = useMemo(() => {
@@ -1748,6 +1748,10 @@ export function TaskPlannerChatTab({ task, columnFlags, projectId, active, expan
           )}
           disabled={queueActionPending || composerState === "sending"}
         />
+        {/*
+        FNXC:TaskPlannerChatQueue 2026-09-06-00:48:
+        Cancellation owns planner dispatch, not the local text or dictation controls. sendMessageContent queues typed text behind cancellationInProgressRef; this composer has no attachment path, so adding one requires an explicit non-text queue contract.
+        */}
         <textarea
           ref={handleComposerRef}
           className="input task-planner-chat-input"
@@ -1756,10 +1760,9 @@ export function TaskPlannerChatTab({ task, columnFlags, projectId, active, expan
           value={draft}
           onChange={handleDraftChange}
           onKeyDown={handleKeyDown}
-          disabled={queueActionPending}
           rows={1}
         />
-        <MicButton {...dictation.micProps} disabled={queueActionPending} />
+        <MicButton {...dictation.micProps} />
         <StandardChatActionButton
           isStreaming={composerState === "sending"}
           canSend={canSend}

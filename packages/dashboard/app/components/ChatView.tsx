@@ -1825,10 +1825,10 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
       return;
     }
 
-    if (isStreaming && files.length > 0) {
+    if ((isStreaming || pendingQueueAction) && files.length > 0) {
       /*
-      FNXC:ChatAttachments 2026-08-10-05:53:
-      Queued direct turns carry text only, so refuse staged attachments during a live reply rather than orphaning previews for files the queue cannot send.
+      FNXC:ChatAttachments 2026-09-06-00:48:
+      Queued direct turns carry text only, so refuse staged attachments while a live reply or its durable cancellation barrier owns dispatch rather than orphaning previews for files the queue cannot send. cancelAndReconcile clears isStreaming synchronously, so pendingQueueAction closes that otherwise invisible window here, where button and Enter submissions converge.
       */
       addToast(t("chat.attachmentsNotQueued", "Attachments can't be queued while a reply is streaming — wait for it to finish"), "warning");
       return;
@@ -1862,6 +1862,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     sendMessage,
     chatCommandContext,
     isStreaming,
+    pendingQueueAction,
     releaseSentAttachments,
     selectedChatCommands,
     chatSnippets,
@@ -3124,7 +3125,6 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
               // the visualViewport/input-focus effects own scroll compensation.
             }}
             rows={1}
-            disabled={pendingQueueAction}
             data-testid="chat-input"
           />
           <AgentMentionPopup
@@ -3157,14 +3157,14 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
             loading={fileMention.loading}
           />
         </div>
-        <MicButton {...composerDictation.micProps} disabled={pendingQueueAction} />
+        <MicButton {...composerDictation.micProps} />
         {/*
-        FNXC:ChatPendingQueue 2026-08-19-06:25:
-        Force-send cancellation must own the Direct composer until server reconciliation completes; otherwise a new send is queued while the selected entry is being dispatched and loses its priority.
+        FNXC:ChatPendingQueue 2026-09-06-00:48:
+        Force-send cancellation owns dispatch, not local composition: the send threshold queues new text until reconciliation preserves the selected entry's priority. Keep canSend action-oriented because Enter bypasses it; attachment-bearing attempts converge in handleSend on the same explicit refusal.
         */}
         <StandardChatActionButton
           isStreaming={isStreaming}
-          canSend={!pendingQueueAction && Boolean(messageInput.trim() || pendingAttachments.length > 0)}
+          canSend={Boolean(messageInput.trim() || pendingAttachments.length > 0)}
           onSend={handleSend}
           onStop={stopStreaming}
         />
