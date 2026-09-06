@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { Task, WorkflowWorkItem } from "@fusion/core";
 import {
   isPlanningContinuationTaskDispatchable,
+  PARKED_CONTINUATION_DEFER_MS,
+  PLANNER_LIVE_CONTINUATION_DEFER_MS,
+  resolveParkedContinuationDeferral,
   resolvePlanningContinuationCandidate,
   selectActionablePlanningContinuations,
 } from "../runtimes/in-process-runtime.js";
@@ -111,6 +114,57 @@ describe("resolvePlanningContinuationCandidate", () => {
       item,
       task: live,
     });
+  });
+
+  it("skips a dispatchable continuation while its planner is live", () => {
+    const item = workItem("planner-live", "planning", { state: "runnable" });
+    expect(resolvePlanningContinuationCandidate(item, task("FN-299"), { plannerLive: true }))
+      .toEqual({ kind: "skip", item, reason: "planner-live" });
+  });
+
+  it("keeps orphan cleanup and operator parks above planner liveness", () => {
+    const item = workItem("planner-live-priority", "planning", { state: "runnable" });
+    expect(resolvePlanningContinuationCandidate(item, undefined, { plannerLive: true }))
+      .toEqual({ kind: "orphan", item, reason: "task-not-found" });
+    expect(resolvePlanningContinuationCandidate(item, task("FN-DONE", { column: "done" }), { plannerLive: true }))
+      .toEqual({ kind: "orphan", item, reason: "task-terminal" });
+    expect(resolvePlanningContinuationCandidate(
+      item,
+      task("FN-APPROVAL", { status: "awaiting-approval" }),
+      { plannerLive: true },
+    )).toEqual({ kind: "skip", item, reason: "awaiting-approval" });
+  });
+
+  it("uses a short fixed deferral for planner ownership without changing operator windows", () => {
+    const now = Date.parse("2026-09-06T00:29:00.000Z");
+    const item = workItem("planner-live-defer", "planning", { state: "retrying" });
+    const plannerLive = resolvePlanningContinuationCandidate(item, task("FN-299"), { plannerLive: true });
+    expect(resolveParkedContinuationDeferral(plannerLive, now, 123_456)).toEqual({
+      itemId: item.id,
+      expectedState: "retrying",
+      retryAfter: new Date(now + PLANNER_LIVE_CONTINUATION_DEFER_MS).toISOString(),
+    });
+
+    for (const [status, expectedReason] of [
+      [{ status: "awaiting-approval" }, "awaiting-approval"],
+      [{ paused: true }, "paused"],
+    ] as const) {
+      const parked = resolvePlanningContinuationCandidate(item, task("FN-PARKED", status));
+      expect(parked).toMatchObject({ kind: "skip", reason: expectedReason });
+      expect(resolveParkedContinuationDeferral(parked, now)).toMatchObject({
+        expectedState: "retrying",
+        retryAfter: new Date(now + PARKED_CONTINUATION_DEFER_MS).toISOString(),
+      });
+    }
+  });
+
+  it("remains actionable when planner liveness is false or omitted", () => {
+    for (const waitReason of ["planning", "capacity", undefined] as const) {
+      const item = workItem(`not-live-${waitReason ?? "none"}`, waitReason);
+      expect(resolvePlanningContinuationCandidate(item, task("FN-READY"), { plannerLive: false }).kind)
+        .toBe("actionable");
+      expect(resolvePlanningContinuationCandidate(item, task("FN-READY")).kind).toBe("actionable");
+    }
   });
 });
 

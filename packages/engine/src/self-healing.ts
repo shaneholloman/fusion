@@ -92,7 +92,10 @@ import { rerouteUnrunPreMergeGateToReview } from "./merge/pre-merge-gate-reseed.
 import { cleanupLandedTaskWorktree, removeEmptyWorkspaceTaskDirectory } from "./merge/post-landing-worktree-cleanup.js";
 import { AutoRecoveryDispatcher } from "./healing/auto-recovery.js";
 import { activeSessionRegistry, executingTaskLock } from "./agents/active-session-registry.js";
-import { isPlanningLive } from "./agents/planning-liveness.js";
+import {
+  getTaskPlanningOrExecutionLivenessSignal,
+  isTaskPlanningOrExecutionLive,
+} from "./agents/planning-execution-liveness.js";
 import { isTaskStillInPlanningStage } from "./execution/replan-target.js";
 import {
   classifyPersistedPlanHandoff,
@@ -8003,7 +8006,10 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       const graceMs = 60_000;
       let offset = 0;
       let repaired = 0;
-      const live = (taskId: string) => activeSessionRegistry.pathsForTask(taskId).some((path) => activeSessionRegistry.isPathActive(path)) || executingTaskLock.has(taskId) || this.options.isTaskActive?.(taskId) === true;
+      const live = (taskId: string) => isTaskPlanningOrExecutionLive(taskId, {
+        isTaskActive: this.options.isTaskActive,
+        getPlanningTaskIds: this.options.getPlanningTaskIds,
+      });
       const evaluate = async (taskId: string) => {
         const task = await this.store.getTask(taskId);
         if (!task) return null;
@@ -8107,9 +8113,10 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       const settings = await this.store.getSettings();
       if (settings.globalPause === true || settings.enginePaused === true) return 0;
       if (typeof this.store.listWorkflowWorkItemsForTask !== "function") return 0;
-      const live = (taskId: string) => activeSessionRegistry.pathsForTask(taskId).some((path) => activeSessionRegistry.isPathActive(path))
-        || executingTaskLock.has(taskId)
-        || this.options.isTaskActive?.(taskId) === true;
+      const live = (taskId: string) => isTaskPlanningOrExecutionLive(taskId, {
+        isTaskActive: this.options.isTaskActive,
+        getPlanningTaskIds: this.options.getPlanningTaskIds,
+      });
       let offset = 0;
       let repaired = 0;
       for (;;) {
@@ -8249,21 +8256,17 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       const now = Date.now();
       const nowIso = new Date(now).toISOString();
       /*
-      FNXC:StrandedContinuationReclaim 2026-09-05-23:52:
-      FN-282 regression (FN-299): a PLANNING session is live work that this proof could not see. Planning
-      used to acquire the task worktree, so it appeared in `activeSessionRegistry` by path; once planning
-      moved to the main checkout it registers no path, holds no `executingTaskLock`, and is not an
-      executing task — so a planner still writing PROMPT.md read as a dead lease and its `plan`
-      continuation was re-queued underneath it. The re-queue re-dispatched the plan node and Plan Review
-      fired 1-2s later against a spec that did not exist yet, whose result row then stayed `pending`.
-      Measured: 10 `plan / running / dead-lease` reclaims across 8 cards in the two days after FN-282
-      landed, and zero in the three weeks before it. `isPlanningLive` is the registry triage already
-      publishes for exactly this question; consulting it costs nothing and closes the race.
+      FNXC:StrandedContinuationReclaim 2026-09-06-00:29:
+      FN-299: a planner without a worktree has no execution-liveness signal, so classify the shared
+      predicate's named signal into execution and planning ownership before evaluating recovery. These
+      planning signals are process-local: after restart they disappear and an expired dead planner is
+      still recoverable. A stuck in-memory owner is bounded separately by `evictStaleProcessing` and
+      `STALE_PROCESSING_THRESHOLD_MS`, so this refusal cannot freeze a card indefinitely.
       */
-      const live = (taskId: string) => activeSessionRegistry.pathsForTask(taskId).some((path) => activeSessionRegistry.isPathActive(path))
-        || executingTaskLock.has(taskId)
-        || isPlanningLive(taskId)
-        || this.options.isTaskActive?.(taskId) === true;
+      const liveness = (taskId: string) => getTaskPlanningOrExecutionLivenessSignal(taskId, {
+        isTaskActive: this.options.isTaskActive,
+        getPlanningTaskIds: this.options.getPlanningTaskIds,
+      });
       const due = await this.store.listDueWorkflowWorkItems({
         now: nowIso,
         states: [...ACTIVE_WORKFLOW_WORK_ITEM_STATES],
@@ -8279,6 +8282,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           const task = await this.store.getTask(item.taskId);
           const terminalColumns = await resolveTaskLifecycleColumns(this.store, item.taskId).catch(() => undefined);
           const doneColumn = terminalColumns?.complete ?? "done";
+          const livenessSignal = liveness(item.taskId);
           const verdict = evaluateStrandedContinuationReclaim({
             item,
             taskMissing: !task,
@@ -8287,7 +8291,10 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
               || task.column === doneColumn
             ),
             taskPaused: task?.userPaused === true || task?.paused === true,
-            live: live(item.taskId),
+            live: livenessSignal === "active-session"
+              || livenessSignal === "executing-lock"
+              || livenessSignal === "task-active",
+            planningLive: livenessSignal === "planning-processor" || livenessSignal === "planning-probe",
             enginePaused,
             stalenessMs: Math.max(0, now - new Date(item.updatedAt).getTime()),
             graceMs,

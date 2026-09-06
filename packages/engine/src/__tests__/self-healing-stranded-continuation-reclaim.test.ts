@@ -14,7 +14,7 @@ vi.mock("../util/run-audit.js", async (importOriginal) => ({
   createRunAuditor: vi.fn(() => ({ database: recordRunAuditEventMock })),
 }));
 
-import { SelfHealingManager } from "../self-healing.js";
+import { SelfHealingManager, type SelfHealingOptions } from "../self-healing.js";
 import { evaluateStrandedContinuationReclaim } from "../workflows/stranded-continuation-reclaim.js";
 import { registerPlanningLivenessProbe } from "../agents/planning-liveness.js";
 
@@ -51,6 +51,7 @@ function harness(
   items: WorkflowWorkItem[] = [item()],
   taskOverrides: Partial<Task> = {},
   settings: Partial<Settings> = {},
+  managerOptions: Partial<SelfHealingOptions> = {},
 ) {
   const task = {
     id: "FN-8932", title: "Memory layer 4a", description: "", column: "todo",
@@ -73,7 +74,13 @@ function harness(
     getTasksDir: vi.fn(() => ""),
   } as unknown as TaskStore;
   resolveTaskLifecycleColumnsMock.mockResolvedValue({ complete: "done" });
-  return { task, store, transitions, logged, manager: new SelfHealingManager(store, { rootDir: "/repo" }) };
+  return {
+    task,
+    store,
+    transitions,
+    logged,
+    manager: new SelfHealingManager(store, { rootDir: "/repo", ...managerOptions }),
+  };
 }
 
 describe("reconcileStrandedWorkflowContinuations", () => {
@@ -192,6 +199,26 @@ describe("evaluateStrandedContinuationReclaim", () => {
       .toEqual({ action: "retire", reason: "task-terminal" });
   });
 
+  it("classifies a live planner separately without weakening higher-priority guards", () => {
+    expect(evaluateStrandedContinuationReclaim({ ...base, planningLive: true }))
+      .toEqual({ action: "none", reason: "live-planning" });
+    expect(evaluateStrandedContinuationReclaim({ ...base, planningLive: true, taskTerminal: true }))
+      .toEqual({ action: "retire", reason: "task-terminal" });
+    expect(evaluateStrandedContinuationReclaim({ ...base, planningLive: true, taskMissing: true }))
+      .toEqual({ action: "retire", reason: "task-missing" });
+    expect(evaluateStrandedContinuationReclaim({ ...base, planningLive: true, enginePaused: true }))
+      .toEqual({ action: "none", reason: "engine-paused" });
+    expect(evaluateStrandedContinuationReclaim({ ...base, planningLive: true, taskPaused: true }))
+      .toEqual({ action: "none", reason: "operator-paused" });
+  });
+
+  it("preserves dead-lease recovery when no planner is live", () => {
+    expect(evaluateStrandedContinuationReclaim({ ...base, planningLive: false }))
+      .toEqual({ action: "requeue", reason: "dead-lease" });
+    expect(evaluateStrandedContinuationReclaim(base))
+      .toEqual({ action: "requeue", reason: "dead-lease" });
+  });
+
   it("treats a future lease expiry as proof of a live claim even past the grace window", () => {
     expect(evaluateStrandedContinuationReclaim({
       ...base,
@@ -209,23 +236,44 @@ re-queued underneath it — which re-dispatched the plan node and fired Plan Rev
 did not exist yet.
 */
 describe("planning liveness protects a live plan continuation", () => {
-  it("leaves a running plan continuation alone while its planner is live", async () => {
-    const { manager, transitions } = harness([item({ nodeId: "plan", leaseOwner: "triage:FN-8932" })]);
+  it("leaves the incident's null-lease plan continuation alone while its probe is live", async () => {
+    const { manager, store, transitions, logged } = harness([
+      item({ nodeId: "plan", leaseOwner: "triage:FN-8932", leaseExpiresAt: null }),
+    ]);
     const unregister = registerPlanningLivenessProbe((taskId) => taskId === "FN-8932");
     try {
       await expect(manager.reconcileStrandedWorkflowContinuations()).resolves.toBe(0);
       expect(transitions).toEqual([]);
+      expect(store.transitionWorkflowWorkItem).not.toHaveBeenCalled();
+      expect(logged).toEqual([]);
+      expect(store.logEntry).not.toHaveBeenCalled();
     } finally {
       unregister();
     }
   });
 
-  it("still re-queues it once the planner is gone", async () => {
-    const { manager, transitions } = harness([item({ nodeId: "plan", leaseOwner: "triage:FN-8932" })]);
+  it("also honors the self-healing planning-task provider without a registered probe", async () => {
+    const { manager, store } = harness(
+      [item({ nodeId: "plan", leaseOwner: "triage:FN-8932", leaseExpiresAt: null })],
+      {},
+      {},
+      { getPlanningTaskIds: () => new Set(["FN-8932"]) },
+    );
+
+    await expect(manager.reconcileStrandedWorkflowContinuations()).resolves.toBe(0);
+    expect(store.transitionWorkflowWorkItem).not.toHaveBeenCalled();
+    expect(store.logEntry).not.toHaveBeenCalled();
+  });
+
+  it("still re-queues and reports the dead lease once the planner is gone", async () => {
+    const { manager, transitions, logged } = harness([
+      item({ nodeId: "plan", leaseOwner: "triage:FN-8932", leaseExpiresAt: null }),
+    ]);
     const unregister = registerPlanningLivenessProbe((taskId) => taskId === "FN-OTHER");
     try {
       await expect(manager.reconcileStrandedWorkflowContinuations()).resolves.toBe(1);
       expect(transitions).toEqual([expect.objectContaining({ state: "runnable" })]);
+      expect(logged).toEqual([expect.stringContaining("plan was stranded in 'running' (dead-lease)")]);
     } finally {
       unregister();
     }

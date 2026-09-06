@@ -1252,6 +1252,10 @@ export function transitionWorkflowWorkItemSyncImpl(store: TaskStore,
       if (patch.expectedState !== undefined && fromState !== patch.expectedState) {
         return store.rowToWorkflowWorkItem(existing);
       }
+      // FNXC:WorkflowWorkItemLeaseCas 2026-09-06-01:28: mirror the async owner CAS so a stale same-state lease holder cannot mutate its successor in compatibility stores.
+      if (patch.expectedLeaseOwner !== undefined && existing.leaseOwner !== patch.expectedLeaseOwner) {
+        return store.rowToWorkflowWorkItem(existing);
+      }
       if (store.isTerminalWorkflowWorkItemState(fromState) && fromState !== state) {
         throw new Error(`Workflow work item ${id} is terminal (${fromState}) and cannot transition to ${state}`);
       }

@@ -13,6 +13,12 @@ export {
 export { ActiveSessionWorktreeRemovalError } from "./worktree/worktree-backend.js";
 export { planningLivenessRegistry, registerPlanningLivenessProbe, isPlanningLive } from "./agents/planning-liveness.js";
 export {
+  getTaskPlanningOrExecutionLivenessSignal,
+  isTaskPlanningOrExecutionLive,
+  type PlanningExecutionLivenessDeps,
+  type TaskLivenessSignal,
+} from "./agents/planning-execution-liveness.js";
+export {
   classifyReportHealth,
   type ReportHealthBucket,
   type ReportHealthClassification,

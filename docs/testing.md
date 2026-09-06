@@ -980,6 +980,14 @@ Prefer `it.each` over copy-pasted `it()` blocks. When trimming, keep: first case
 - Integration tests exercising real SQLite, real worker pool, or spawned processes.
 - Lean core/engine unit tests with low mock burden.
 
+## Testing short-circuit guards and output handoffs
+
+<!-- FNXC:PlanReviewOutputExclusivity 2026-09-06-01:01: FN-299 showed that a passing event-driven test can exercise only an earlier short-circuit term, and that a writer-side assertion can target data the real reader intentionally ignores. -->
+
+For a disjunctive event guard, exercise each term with the earlier terms unarmed. In particular, do not emit a setup event that inserts an ID into a set if deleting that ID is the guard's first term; the later durable predicates then become unreachable even though the test passes. Cover nominal evidence directly rather than treating an exception form (such as an operator bypass) as coverage of the ordinary producer result, and include an identical-event case for any deduplication set.
+
+For an output-chain claim such as “review approval queues execution” or “revision notes reach planning,” assert all three boundaries: the durable gate, the production trigger, and its observable consumer effect. Use the real reader for transmitted data; do not assert against an audit or activity-log copy that the reader excludes. When several routes share the same top-level outcome, route assertions must use visited nodes, durable writes, and the final queue/replan effect rather than the shared outcome value.
+
 ## Test isolation for module-singleton state
 
 <!-- FNXC:ConcurrencyAdmission 2026-08-01-06:57: Module-singleton admission state can survive mocked lane starts and unstopped processors, silently consuming capacity in later tests. FN-8671 fixes that root cause without quarantine: stop tracked owners first, then clear shared state in a finally block and assert the result through read-only inspection seams. -->

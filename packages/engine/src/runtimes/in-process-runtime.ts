@@ -65,6 +65,11 @@ import { MissionExecutionLoop } from "../missions/mission-execution-loop.js";
 import { TriageProcessor } from "../triage.js";
 import { validateProjectNodeMapping } from "../project/node-dispatch-validation.js";
 import { attachAgentLinkSync } from "../agents/task-agent-sync.js";
+import {
+  isPlanningContinuationDispatchClaim,
+  isTaskPlanningOrExecutionLive,
+  planningContinuationDispatchLeaseOwner,
+} from "../agents/planning-execution-liveness.js";
 import { generateSyntheticRunId } from "../util/run-audit.js";
 import { emitBoundedRunAudit } from "../util/emit-bounded-run-audit.js";
 import { setImmediate as setImmediateCb } from "node:timers";
@@ -160,7 +165,7 @@ const LEGACY_TERMINAL_COLUMNS: ReadonlySet<string> = new Set(["done"]);
 /** Outcome of resolving one due work item for the planning-continuation drain. */
 export type PlanningContinuationResolution =
   | { kind: "actionable"; item: WorkflowWorkItem; task: Task }
-  | { kind: "skip"; item: WorkflowWorkItem; reason: "paused" | "awaiting-approval" }
+  | { kind: "skip"; item: WorkflowWorkItem; reason: "paused" | "awaiting-approval" | "planner-live" }
   | {
       kind: "orphan";
       item: WorkflowWorkItem;
@@ -181,7 +186,7 @@ export type PlanningContinuationResolution =
 export function resolvePlanningContinuationCandidate(
   item: WorkflowWorkItem,
   task: Task | null | undefined,
-  opts?: { taskLookupFailed?: boolean; terminalColumns?: ReadonlySet<string> },
+  opts?: { taskLookupFailed?: boolean; terminalColumns?: ReadonlySet<string>; plannerLive?: boolean },
 ): PlanningContinuationResolution {
   if (opts?.taskLookupFailed === true || task == null) {
     return { kind: "orphan", item, reason: "task-not-found" };
@@ -233,6 +238,15 @@ export function resolvePlanningContinuationCandidate(
     return { kind: "skip", item, reason: "paused" };
   }
   /*
+  FNXC:PlanningContinuationDispatch 2026-09-06-00:29:
+  A runnable row can briefly coexist with the planner that just armed its successor. Defer rather
+  than dispatch while planner ownership is live; missing and terminal tasks remain orphans above,
+  and operator-owned approval/pause reasons retain priority over this transient process condition.
+  */
+  if (opts?.plannerLive === true) {
+    return { kind: "skip", item, reason: "planner-live" };
+  }
+  /*
   FNXC:WorkflowResolvedColumns 2026-07-30-01:40 (the partially-threaded conversion named by
   workflow-planning-continuation-terminal-gap-live-e2e.pg.test.ts):
   THREAD THE SET THIS FUNCTION ALREADY RESOLVED. The terminal test at the top of this function uses the
@@ -276,13 +290,16 @@ export function resolvePlanningContinuationCandidate(
  * to at most one slot per minute per parked card.
  */
 export const PARKED_CONTINUATION_DEFER_MS = 60_000;
+export const PLANNER_LIVE_CONTINUATION_DEFER_MS = 15_000;
 
 /**
  * FNXC:PlanApprovalHold 2026-07-27-21:30 (U7, PR #2491 review — greptile P1):
  * Decide whether a skipped due item should be pushed out of the due window.
  *
- * Only the OPERATOR-PARK skips qualify (`awaiting-approval`, `paused`): those are
- * open-ended waits on a human, which is what makes them able to accumulate.
+ * Operator parks (`awaiting-approval`, `paused`) use the caller-controlled human-wait window.
+ * `planner-live` uses a short fixed window because it is a normal handoff: `specifyTask` terminalizes
+ * the planning row and releases capacity before it removes the task from its planning-owner set.
+ * The item stays runnable, so a delayed handoff adds bounded latency and never becomes a new hold.
  *
  * FNXC:WorkflowScheduling 2026-08-11-17:30: `not-planning` was the third skip
  * reason here and is now gone — this drain owns every `kind: "task"` row, so a
@@ -298,7 +315,10 @@ export function resolveParkedContinuationDeferral(
   deferMs: number = PARKED_CONTINUATION_DEFER_MS,
 ): { itemId: string; expectedState: WorkflowWorkItemState; retryAfter: string } | null {
   if (resolution.kind !== "skip") return null;
-  if (resolution.reason !== "awaiting-approval" && resolution.reason !== "paused") return null;
+  if (resolution.reason !== "awaiting-approval" && resolution.reason !== "paused" && resolution.reason !== "planner-live") return null;
+  const selectedDeferMs = resolution.reason === "planner-live"
+    ? PLANNER_LIVE_CONTINUATION_DEFER_MS
+    : deferMs;
   return {
     itemId: resolution.item.id,
     /*
@@ -311,7 +331,7 @@ export function resolveParkedContinuationDeferral(
     never be able to disturb live work to achieve it.
     */
     expectedState: resolution.item.state,
-    retryAfter: new Date(nowMs + deferMs).toISOString(),
+    retryAfter: new Date(nowMs + selectedDeferMs).toISOString(),
   };
 }
 
@@ -486,6 +506,8 @@ export interface DuePlanningContinuationDrainDeps {
   getTask: (taskId: string) => Promise<Task | undefined>;
   /** The task's own terminal columns; omitted callers use the built-in Done fallback. */
   resolveTerminalColumns?: (taskId: string) => Promise<ReadonlySet<string>>;
+  /** True only for planning ownership; execution admission remains the dispatcher's responsibility. */
+  isPlannerLive?: (taskId: string) => boolean;
   cancelOrphan: (
     item: WorkflowWorkItem,
     reason: "task-not-found" | "task-terminal",
@@ -541,7 +563,11 @@ export async function drainDuePlanningContinuations(
     const terminalColumns = taskLookupFailed
       ? undefined
       : await deps.resolveTerminalColumns?.(item.taskId).catch(() => undefined);
-    const resolved = resolvePlanningContinuationCandidate(item, task, { taskLookupFailed, terminalColumns });
+    const resolved = resolvePlanningContinuationCandidate(item, task, {
+      taskLookupFailed,
+      terminalColumns,
+      plannerLive: deps.isPlannerLive?.(item.taskId) === true,
+    });
     if (resolved.kind === "orphan") {
       await deps.cancelOrphan(resolved.item, resolved.reason);
       continue;
@@ -559,11 +585,72 @@ export async function drainDuePlanningContinuations(
 const planningContinuationRuns = new Set<string>();
 const planningContinuationCapacityReasons = new Map<string, string>();
 
+async function dispatchPlanningContinuationIfCurrent(input: {
+  store: TaskStore;
+  task: Task;
+  item: WorkflowWorkItem;
+  isPlannerLive?: (taskId: string) => boolean;
+  dispatch: () => void;
+}): Promise<boolean> {
+  const validateAndDispatch = async (): Promise<boolean> => {
+    if (input.isPlannerLive?.(input.task.id) === true) return false;
+    const currentTask = typeof input.store.getTask === "function"
+      ? await input.store.getTask(input.task.id).catch(() => undefined)
+      : input.task;
+    if (!isPlanningContinuationTaskDispatchable(currentTask)) return false;
+    if (isTaskBlockedOnApproval(currentTask)) return false;
+    const currentItem = typeof input.store.getWorkflowWorkItem === "function"
+      ? await input.store.getWorkflowWorkItem(input.item.id).catch(() => null)
+      : input.item;
+    if (!currentItem
+      || currentItem.id !== input.item.id
+      || currentItem.taskId !== input.item.taskId
+      || currentItem.runId !== input.item.runId
+      || currentItem.nodeId !== input.item.nodeId
+      || currentItem.nodeInstanceId !== input.item.nodeInstanceId
+      || currentItem.kind !== input.item.kind
+      || currentItem.state !== input.item.state
+      || currentItem.attempt !== input.item.attempt
+      || currentItem.retryAfter !== input.item.retryAfter
+      || currentItem.leaseOwner !== input.item.leaseOwner
+      || currentItem.leaseExpiresAt !== input.item.leaseExpiresAt) return false;
+    /*
+    FNXC:PlanningContinuationDispatch 2026-09-06-01:58:
+    Validation under the planning lock is insufficient by itself: a planner that was awaiting setup
+    can acquire the lock after dispatch starts and otherwise replace this row. Publish the winner as
+    a durable running claim before launching the graph. The state-and-owner CAS makes another drain
+    or planner an ordinary loser, while the executor consumes this same running continuation.
+    */
+    const transition = (input.store as Partial<TaskStore>).transitionWorkflowWorkItem;
+    if (typeof transition === "function") {
+      const leaseOwner = planningContinuationDispatchLeaseOwner(currentItem);
+      const claimed = await input.store.transitionWorkflowWorkItem(currentItem.id, "running", {
+        expectedState: currentItem.state,
+        expectedLeaseOwner: currentItem.leaseOwner,
+        leaseOwner,
+        leaseExpiresAt: null,
+        lastError: null,
+        blockedReason: null,
+      });
+      if (!isPlanningContinuationDispatchClaim(claimed) || claimed.leaseOwner !== leaseOwner) {
+        return false;
+      }
+    }
+    input.dispatch();
+    return true;
+  };
+  const lifecycleLock = (input.store as Partial<TaskStore>).withPlanningLifecycleLock;
+  return typeof lifecycleLock === "function"
+    ? await input.store.withPlanningLifecycleLock(input.task.id, validateAndDispatch)
+    : await validateAndDispatch();
+}
+
 export async function admitPlanningContinuation(input: {
   store: TaskStore;
   projectId: string;
   task: Task;
   item: WorkflowWorkItem;
+  isPlannerLive?: (taskId: string) => boolean;
   dispatch: () => Promise<void>;
 }): Promise<boolean> {
   const runKey = `${input.projectId}:${input.task.id}`;
@@ -591,13 +678,20 @@ export async function admitPlanningContinuation(input: {
   const taskAlreadyActive = (await persistedTopLevelAgentTaskIdsFromStore(input.store, [input.task]))
     .includes(input.task.id);
   if (taskAlreadyActive) {
-    void input.dispatch().catch(() => {});
+    await dispatchPlanningContinuationIfCurrent({
+      store: input.store,
+      task: input.task,
+      item: input.item,
+      isPlannerLive: input.isPlannerLive,
+      dispatch: () => { void input.dispatch().catch(() => {}); },
+    });
     return true;
   }
   // This snapshot is intentionally created lazily inside the coordinator drain.
   // A prior lane may have been finishing its own handoff before this task's
   // turn; a pre-drain project snapshot can admit into its newly occupied slot.
   let admissionSnapshot: Promise<{ count: number; ids: string[] }> | undefined;
+  let plannerOrContinuationSuperseded = false;
   const getAdmissionSnapshot = () => admissionSnapshot ??= loadClaimSnapshot();
   await projectAdmissionCoordinator.admitNext({
     projectId: input.projectId,
@@ -622,28 +716,46 @@ export async function admitPlanningContinuation(input: {
           // cannot release capacity owned by that still-running workflow.
           return true;
         }
-        selected = true;
-        planningContinuationRuns.add(runKey);
-        // Keep the coordinator reservation for the whole resumed run. The task
-        // can remain canonically inactive until its first workflow node writes a
-        // pending lease; releasing at executor entry recreates the over-cap gap.
-        let run: Promise<void>;
-        try {
-          run = input.dispatch();
-        } catch (error) {
-          planningContinuationRuns.delete(runKey);
-          throw error;
-        }
-        void run
-          .finally(() => {
-            planningContinuationRuns.delete(runKey);
-            projectAdmissionCoordinator.releaseReservation(input.task.id);
-          })
-          .catch(() => {});
+        /*
+        FNXC:PlanningContinuationDispatch 2026-09-06-01:28:
+        Capacity admission awaits mutable project state, so the planner can acquire ownership after
+        the due-poll liveness sample. Fence the point of use with the planning lifecycle lock, then
+        re-read both task and exact continuation snapshot before synchronously launching execution.
+        Triage installs its running continuation under the same lock; whichever owner arrives first
+        is visible to the other, and a superseded candidate declines without consuming capacity.
+        */
+        const dispatched = await dispatchPlanningContinuationIfCurrent({
+          store: input.store,
+          task: input.task,
+          item: input.item,
+          isPlannerLive: input.isPlannerLive,
+          dispatch: () => {
+            selected = true;
+            planningContinuationRuns.add(runKey);
+            // Keep the coordinator reservation for the whole resumed run. The task
+            // can remain canonically inactive until its first workflow node writes a
+            // pending lease; releasing at executor entry recreates the over-cap gap.
+            let run: Promise<void>;
+            try {
+              run = input.dispatch();
+            } catch (error) {
+              planningContinuationRuns.delete(runKey);
+              throw error;
+            }
+            void run
+              .finally(() => {
+                planningContinuationRuns.delete(runKey);
+                projectAdmissionCoordinator.releaseReservation(input.task.id);
+              })
+              .catch(() => {});
+          },
+        });
+        if (!dispatched) plannerOrContinuationSuperseded = true;
+        return dispatched;
       },
     }],
   });
-  if (selected || duplicateHandled) {
+  if (selected || duplicateHandled || plannerOrContinuationSuperseded) {
     planningContinuationCapacityReasons.delete(runKey);
     return true;
   }
@@ -676,6 +788,7 @@ export function createPlanningContinuationDispatcher(input: {
   store: TaskStore;
   projectId: string;
   execute: (task: Task) => Promise<void>;
+  isPlannerLive?: (taskId: string) => boolean;
   onError?: (task: Task, item: WorkflowWorkItem, error: unknown) => void;
 }): (task: Task, item: WorkflowWorkItem) => Promise<boolean> {
   return (task, item) => admitPlanningContinuation({
@@ -683,6 +796,7 @@ export function createPlanningContinuationDispatcher(input: {
     projectId: input.projectId,
     task,
     item,
+    isPlannerLive: input.isPlannerLive,
     dispatch: async () => {
       await input.execute(task).catch((error) => {
         input.onError?.(task, item, error);
@@ -2777,6 +2891,12 @@ export class InProcessRuntime
     } catch {
       /* unreadable settings: proceed as before rather than wedging the pump */
     }
+    const isPlannerLive = (taskId: string) => isTaskPlanningOrExecutionLive(taskId, {
+      activeSessionRegistry: { pathsForTask: () => [], isPathActive: () => false },
+      executingTaskLock: { has: () => false },
+      isTaskActive: () => false,
+      getPlanningTaskIds: () => this.triageProcessor?.getPlanningTaskIds() ?? new Set<string>(),
+    });
     try {
       await drainDuePlanningContinuations({
         listDue: () => this.taskStore.listDueWorkflowWorkItems({
@@ -2795,12 +2915,20 @@ export class InProcessRuntime
             "done",
           ]);
         },
+        /*
+        FNXC:PlanningContinuationDispatch 2026-09-06-00:29:
+        Restrict the shared predicate to its two planning inputs here. Executor liveness is already
+        governed by `admitPlanningContinuation`; folding it into this transient handoff guard would
+        broaden dispatch policy and could indefinitely defer a continuation the executor owns.
+        */
+        isPlannerLive,
         cancelOrphan: (item, reason) => this.cancelOrphanedWorkflowWorkItem(item, reason),
         defer: (deferral) => this.deferParkedWorkflowWorkItem(deferral),
         dispatch: createPlanningContinuationDispatcher({
           store: this.taskStore,
           projectId: this.taskStore.getRootDir(),
           execute: (task) => this.executor.execute(task),
+          isPlannerLive,
           onError: (_task, item, error) => {
             runtimeLog.error(`Workflow continuation ${item.id} failed:`, error);
           },
