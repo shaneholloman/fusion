@@ -959,8 +959,13 @@ export async function createWorkflowDefinitionImpl(store: TaskStore, input: Work
     });
   }
 
+/*
+FNXC:WorkflowSuccession 2026-09-06-02:54:
+Both capacity counters canonicalize the requested pool and every persisted occupant through the shared resolver. This keeps historical retired selections in the successor budget regardless of which identity belongs to the candidate.
+*/
 export function countActiveInCapacitySlotSyncImpl(store: TaskStore, params: { targetColumn: string; workflowId: string; countPending: boolean; excludeTaskId: string; }): number {
     const { targetColumn, workflowId, countPending, excludeTaskId } = params;
+    const requestedWorkflowId = resolveCapacityPoolId(workflowId);
     // Candidate rows: in the column now, or (optionally) mid-transition into it.
     // LEFT JOIN the selection row so we can scope by effective workflow id in JS.
     const rows = store.db
@@ -982,7 +987,7 @@ export function countActiveInCapacitySlotSyncImpl(store: TaskStore, params: { ta
     let count = 0;
     for (const row of rows) {
       const effectiveWorkflowId = resolveCapacityPoolId(row.wid);
-      if (effectiveWorkflowId !== workflowId) continue;
+      if (effectiveWorkflowId !== requestedWorkflowId) continue;
 
       if (row.col === targetColumn) {
         count += 1;
@@ -1005,6 +1010,7 @@ export function countActiveInCapacitySlotSyncImpl(store: TaskStore, params: { ta
 
 export async function countActiveInCapacitySlotAsyncImpl(store: TaskStore, params: { tx: DbTransaction; targetColumn: string; workflowId: string; countPending: boolean; excludeTaskId: string; }): Promise<number> {
     const { tx, targetColumn, workflowId, countPending, excludeTaskId } = params;
+    const requestedWorkflowId = resolveCapacityPoolId(workflowId);
     const rows = await tx
       .select({
         id: schema.project.tasks.id,
@@ -1034,7 +1040,7 @@ export async function countActiveInCapacitySlotAsyncImpl(store: TaskStore, param
     let count = 0;
     for (const row of rows) {
       const effectiveWorkflowId = resolveCapacityPoolId(row.wid);
-      if (effectiveWorkflowId !== workflowId) continue;
+      if (effectiveWorkflowId !== requestedWorkflowId) continue;
 
       if (row.col === targetColumn) {
         count += 1;

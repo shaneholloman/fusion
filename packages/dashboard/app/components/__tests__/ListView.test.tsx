@@ -91,8 +91,8 @@ vi.mock("../QuickEntryBox", () => ({
     };
 
     const selectedWorkflow = workflowOptions?.find((option) => option.id === selectedWorkflowId);
-    const showStart = selectedWorkflowId === "builtin:coding-ideas"
-      || defaultWorkflowId === "builtin:coding-ideas"
+    const showStart = selectedWorkflowId === "builtin:coding-ideas-v2"
+      || defaultWorkflowId === "builtin:coding-ideas-v2"
       || selectedWorkflow?.columns?.[0]?.flags?.manualIntake === true;
 
     const handoff = (callback?: (description: string, workflowId?: string | null) => void) => {
@@ -149,7 +149,7 @@ vi.mock("../QuickEntryBox", () => ({
             Save
           </button>
           {showStart && (
-            <button type="button" data-testid="quick-entry-start" onClick={() => void onCreate?.({ description: "Started task", workflowId: "builtin:coding-ideas", column: "todo" })}>
+            <button type="button" data-testid="quick-entry-start" onClick={() => void onCreate?.({ description: "Started task", workflowId: "builtin:coding-ideas-v2", column: "todo" })}>
               Start
             </button>
           )}
@@ -4280,9 +4280,9 @@ describe("ListView Quick Entry", () => {
     const onQuickCreate = vi.fn().mockResolvedValue(createMockTask({ id: "FN-started", column: "todo" }));
     vi.mocked(fetchBoardWorkflows).mockResolvedValue({
       flagEnabled: true,
-      defaultWorkflowId: "builtin:coding-ideas",
+      defaultWorkflowId: "builtin:coding-ideas-v2",
       workflows: [{
-        id: "builtin:coding-ideas",
+        id: "builtin:coding-ideas-v2",
         name: "Coding (Ideas)",
         columns: [
           { id: "ideas", name: "Ideas", flags: { intake: true, hold: true, manualIntake: true } },
@@ -4292,12 +4292,12 @@ describe("ListView Quick Entry", () => {
       taskWorkflowIds: {},
     });
     renderListView({ onQuickCreate });
-    await waitFor(() => expect(screen.getByTestId("quick-entry-workflow-props")).toHaveAttribute("data-default-workflow-id", "builtin:coding-ideas"));
+    await waitFor(() => expect(screen.getByTestId("quick-entry-workflow-props")).toHaveAttribute("data-default-workflow-id", "builtin:coding-ideas-v2"));
     fireEvent.click(screen.getByTestId("quick-entry-start"));
 
     await waitFor(() => expect(onQuickCreate).toHaveBeenCalledWith(expect.objectContaining({
       description: "Started task",
-      workflowId: "builtin:coding-ideas",
+      workflowId: "builtin:coding-ideas-v2",
       column: "todo",
     })));
   });

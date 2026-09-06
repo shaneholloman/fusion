@@ -56,7 +56,7 @@ function failedReviewTask(overrides: Partial<Task> = {}): Task {
   } as Task;
 }
 
-function createRecoveryHarness(workflowId: "builtin:coding-ideas-v2" | "builtin:coding-ideas") {
+function createRecoveryHarness(workflowId: "builtin:coding-ideas-v2" | "builtin:coding") {
   const row = failedReviewTask();
   const calls: string[] = [];
   let bounce: Promise<unknown> | undefined;
@@ -246,7 +246,7 @@ describe("FN-267 review remediation precedes review-to-WIP movement", () => {
   });
 
   it("treats a reopened trailing occurrence as the pending work required by the bounce", async () => {
-    const harness = createRecoveryHarness("builtin:coding-ideas");
+    const harness = createRecoveryHarness("builtin:coding");
     expect(resolveStepReopenPolicy(BUILTIN_CODING_IDEAS_WORKFLOW_IR)).toBe("reopen-trailing");
 
     await recoverFailedPreMergeWorkflowStep({

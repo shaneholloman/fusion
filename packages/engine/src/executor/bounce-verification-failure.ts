@@ -7,8 +7,8 @@
  * `stepReopenPolicy` decides the shape, and the two are not interchangeable:
  *
  *  - `reopen-trailing` — the workflow expects the trailing completed step to be reopened and redone
- *    in place. `sendTaskBackForFix` performs that reopen itself. This is every ordinary coding
- *    workflow (builtin:coding, builtin:coding-ideas).
+ *    in place. `sendTaskBackForFix` performs that reopen itself. `builtin:coding` and stepwise
+ *    workflows retaining the default parse contract use this policy.
  *  - `none` — the workflow declared (`parse.implementationOnlySteps` + `preserveRemediationSteps`)
  *    that remediation arrives as APPENDED named steps, so nothing may be reopened.
  *
@@ -18,6 +18,12 @@
  * answered `already-expanded`, and the card walked on to Code Review with the failing command
  * unaddressed — the verification result was measured, reported, and then silently discarded.
  * Measured on builtin:coding-ideas-v2, the only built-in that selects `none`.
+ *
+ * FNXC:WorkflowSuccession 2026-09-06-02:15:
+ * FN-297 retires the earlier Ideas catalog entry. The surviving Coding (Ideas) workflow keeps
+ * `stepReopenPolicy: none`, while Coding (Auto) continues through the default stepwise
+ * `reopen-trailing` path; comments and recovery routing must not treat the composition-only base
+ * IR as another offered workflow.
  *
  * `appendReviewRemediationSteps` is the existing authority for the appended shape (it already serves
  * the Code Review gate). Its `Verification` branch has been caller-less since the graph's

@@ -11,7 +11,7 @@ import type {Settings} from "../types.js";
 import { parseWorkflowIr, downgradeIrToV1IfPure } from "../workflows/workflow-ir.js";
 import {OccupiedColumnsError, assertRehomeTargetValid, computeRemovedOccupiedColumns, computeIncompatibleFieldChanges, IncompatibleFieldChangeError, resolveEntryColumnId} from "../workflows/workflow-reconciliation.js";
 import type {WorkflowFieldDefinition} from "../workflows/workflow-ir-types.js";
-import {resolveDefaultWorkflowIr} from "../workflows/builtin-workflows.js";
+import {resolveDefaultWorkflowIr, resolveRetiredBuiltinWorkflowId} from "../workflows/builtin-workflows.js";
 import "../builtin-traits.js";
 import {normalizeWorkflowIcon, type WorkflowDefinition, type WorkflowDefinitionUpdate} from "../workflows/workflow-definition-types.js";
 import {resolveDefaultOnOptionalGroupIds} from "../workflows/workflow-optional-steps.js";
@@ -476,7 +476,14 @@ export async function deleteWorkflowDefinitionImpl(store: TaskStore, id: string)
     }
   }
 
-export async function setDefaultWorkflowIdImpl(store: TaskStore, workflowId: string | null): Promise<void> {
+export async function setDefaultWorkflowIdImpl(store: TaskStore, requestedWorkflowId: string | null): Promise<void> {
+    /*
+    FNXC:WorkflowSuccession 2026-09-06-02:15:
+    Project-default and task-selection writes normalize retired requests at function entry. The retired id remains requestable for compatibility but cannot be written back into durable selection state.
+    */
+    const workflowId = requestedWorkflowId === null
+      ? null
+      : resolveRetiredBuiltinWorkflowId(requestedWorkflowId);
     if (workflowId) {
       const exists = await store.getWorkflowDefinition(workflowId);
       if (!exists) throw new Error(`Workflow '${workflowId}' not found`);
@@ -492,7 +499,8 @@ export async function setDefaultWorkflowIdImpl(store: TaskStore, workflowId: str
     await store.updateSettings({ defaultWorkflowId: workflowId } as unknown as Partial<Settings>);
   }
 
-export async function selectTaskWorkflowImpl(store: TaskStore, taskId: string, workflowId: string): Promise<string[]> {
+export async function selectTaskWorkflowImpl(store: TaskStore, taskId: string, requestedWorkflowId: string): Promise<string[]> {
+    const workflowId = resolveRetiredBuiltinWorkflowId(requestedWorkflowId);
     /* FNXC:SqliteDualPathCleanup 2026-07-26-14:08: workflow definition deletes require AsyncDataLayer. */
     const layer: AsyncDataLayer = store.asyncLayer!;
     // Hold the task lock across the whole sequence (materialize → owner write →

@@ -787,11 +787,14 @@ function isTaskFieldEditableColumn(column: ColumnId, flags?: TaskContextMenuColu
   return isFieldEditableColumnRole(flags, column);
 }
 const GITHUB_TRACKING_EDITABLE_COLUMNS: Set<ColumnId> = new Set<ColumnId>(["triage", "todo", "in-progress", "in-review", "ideas"]);
-const CODING_IDEAS_WORKFLOW_ID = "builtin:coding-ideas";
+const CODING_IDEAS_WORKFLOW_ID = "builtin:coding-ideas-v2";
 
 /*
 FNXC:GitHubTracking 2026-07-22-00:46:
 Ideas tasks must be able to opt into or out of GitHub tracking before planning, whether they remain in the Ideas intake column or have advanced in Coding (Ideas). Use the resolved workflow ID rather than its display name so localized names and arbitrary custom workflows cannot gain this editing capability.
+
+FNXC:WorkflowSuccession 2026-09-06-02:15:
+The GitHub-tracking exception follows the surviving builtin:coding-ideas-v2 identity. Authoritative selection reads canonicalize retired rows before this UI sees them, so the removed id needs no second affordance branch.
 */
 /*
 FNXC:WorkflowResolvedColumns 2026-07-31-23:59:
@@ -801,7 +804,7 @@ THE EDITABLE SET IS A HARDCODED LEGACY LANE LIST, so on a renamed board this cap
 except the terminal two. It was consulted with `.has(column)` and had NO resolved branch and NO flags
 fallback, so on a board with renamed lanes it matched nothing and `canTaskEditGithubTracking` returned
 false for EVERY task. The operator simply could not turn GitHub tracking on or off, with no error and
-no explanation; the only thing keeping it reachable was the unrelated `builtin:coding-ideas` escape
+no explanation; the only thing keeping it reachable was the unrelated Ideas-workflow escape
 hatch on the right.
 
 WHY NO CHECK SAW IT. The census counts COMPARISONS against legacy ids. This is a Set literal — a

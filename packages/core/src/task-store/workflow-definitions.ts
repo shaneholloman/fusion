@@ -12,7 +12,7 @@
 import { TaskStore } from "../store.js";
 import {resolveEntryColumnId, WorkflowSwitchRehomeFailedError, buildSwitchReconciliation} from "../workflows/workflow-reconciliation.js";
 import { pruneAgentLogFiles as pruneAgentLogFileEntries, readAgentLogEntriesByTimeRange } from "../agents/agent-log-file-store.js";
-import { BUILTIN_WORKFLOWS, DEFAULT_WORKFLOW_ID, resolveDefaultWorkflowIr, getBuiltinWorkflow, getRequiredPluginIdForBuiltinWorkflow, isBuiltinWorkflowDeprecated, isBuiltinWorkflowEnabled, isBuiltinWorkflowId, isBuiltinWorkflowPluginGated } from "../workflows/builtin-workflows.js";
+import { BUILTIN_WORKFLOWS, DEFAULT_WORKFLOW_ID, resolveDefaultWorkflowIr, getBuiltinWorkflow, getRequiredPluginIdForBuiltinWorkflow, isBuiltinWorkflowDeprecated, isBuiltinWorkflowEnabled, isBuiltinWorkflowId, isBuiltinWorkflowPluginGated, resolveRetiredBuiltinWorkflowId } from "../workflows/builtin-workflows.js";
 import { CentralCore } from "../central/central-core.js";
 import { type DistributedTaskIdAllocator } from "../tasks/distributed-task-id.js";
 import { ExperimentSessionStore } from "../eval/experiment-session-store.js";
@@ -284,11 +284,15 @@ export async function getWorkflowDefinitionImpl(store: TaskStore,
   ): Promise<WorkflowDefinition | undefined> {
     const builtin = getBuiltinWorkflow(id);
     if (builtin) {
-      if (isBuiltinWorkflowPluginGated(id)) {
-        const requiredPluginId = getRequiredPluginIdForBuiltinWorkflow(id);
+      /*
+      FNXC:WorkflowSuccession 2026-09-06-02:15:
+      A retired alias resolves the successor's plugin policy and prompt overrides under the successor's canonical key. The requested alias must not create a second configuration namespace.
+      */
+      if (isBuiltinWorkflowPluginGated(builtin.id)) {
+        const requiredPluginId = getRequiredPluginIdForBuiltinWorkflow(builtin.id);
         if (!requiredPluginId || !(await store.isPluginInstalled(requiredPluginId))) return undefined;
       }
-      const ir = await store.applyBuiltInPromptOverridesAsync(id, builtin.ir);
+      const ir = await store.applyBuiltInPromptOverridesAsync(builtin.id, builtin.ir);
       return { ...builtin, ir };
     }
     // FNXC:WorkflowDefinitions 2026-06-27-06:00: PG backend reads the custom row
@@ -450,7 +454,11 @@ export function resolveTaskWorkflowIrSyncImpl(store: TaskStore, taskId: string):
     if (isBuiltinWorkflowId(workflowId)) {
       const builtin = getBuiltinWorkflow(workflowId);
       const ir = builtin?.ir;
-      return store.applyBuiltInPromptOverridesSync(workflowId, ir === undefined ? resolveDefaultWorkflowIr() : typeof ir === "string" ? parseWorkflowIr(ir) : ir);
+      /*
+      FNXC:WorkflowSuccession 2026-09-06-02:15:
+      Sync resolution shares the successor's prompt-override key with async definition reads, preventing a retired request alias from reviving stale configuration.
+      */
+      return store.applyBuiltInPromptOverridesSync(builtin?.id ?? workflowId, ir === undefined ? resolveDefaultWorkflowIr() : typeof ir === "string" ? parseWorkflowIr(ir) : ir);
     }
     try {
       const row = store.db
@@ -499,8 +507,12 @@ export async function getTaskWorkflowSelectionsAsyncImpl(
       eq(schema.project.taskWorkflowSelection.projectId, projectId),
       inArray(schema.project.taskWorkflowSelection.taskId, ids),
     ));
+  /*
+  FNXC:WorkflowSuccession 2026-09-06-02:15:
+  Canonicalize authoritative batch reads instead of migrating stored rows. Scheduler capacity and board readers then share one successor identity while older binaries retain database compatibility.
+  */
   return new Map(rows.map((row) => [row.taskId, {
-    workflowId: row.workflowId,
+    workflowId: resolveRetiredBuiltinWorkflowId(row.workflowId),
     stepIds: Array.isArray(row.stepIds) ? row.stepIds.filter((stepId): stepId is string => typeof stepId === "string") : [],
   }]));
 }
@@ -526,7 +538,11 @@ export async function getTaskWorkflowSelectionAsyncImpl(store: TaskStore, taskId
     let stepIds: string[] = [];
     const parsed = row.stepIds as unknown;
     if (Array.isArray(parsed)) stepIds = parsed.filter((s): s is string => typeof s === "string");
-    return { workflowId: row.workflowId, stepIds };
+    /*
+    FNXC:WorkflowSuccession 2026-09-06-02:15:
+    Canonicalize the authoritative per-task read so legacy rows join the successor's single board lane without a schema migration. A later selection write converges storage naturally.
+    */
+    return { workflowId: resolveRetiredBuiltinWorkflowId(row.workflowId), stepIds };
 }
 
 export async function writeTaskWorkflowSelectionImpl(store: TaskStore, taskId: string, workflowId: string, stepIds: string[]): Promise<void> {
@@ -674,16 +690,22 @@ export async function materializeExplicitWorkflowStepsImpl(store: TaskStore,
     // FNXC:CodingIdeasWorkflow 2026-07-05-19:45: surface the workflow's manual
     // intake column so create paths can land the task there instead of the
     // hard-coded "triage" (main FN-7591 parity; the cutover copies predated it).
-    return { workflowId, stepIds: resolveDefaultOnOptionalGroupIds(def.ir), entryColumnId: resolveEntryColumnId(def.ir) };
+    /* The resolved definition owns the canonical identity persisted by all materialization consumers. */
+    return { workflowId: def.id, stepIds: resolveDefaultOnOptionalGroupIds(def.ir), entryColumnId: resolveEntryColumnId(def.ir) };
 }
 
 export async function selectTaskWorkflowAndReconcileImpl(store: TaskStore,
     taskId: string,
-    workflowId: string,
+    requestedWorkflowId: string,
   ): Promise<{
     enabledWorkflowSteps: string[];
     reconciliation?: { preserved: boolean; fromColumn: string; toColumn: string };
   }> {
+    /*
+    FNXC:WorkflowSuccession 2026-09-06-02:15:
+    Normalize before preflight so definition lookup, capacity pooling, errors, audit metadata, re-homing and the selection writer all use the successor identity. Retired ids stay requestable but are never persisted.
+    */
+    const workflowId = resolveRetiredBuiltinWorkflowId(requestedWorkflowId);
     /*
     FNXC:WorkflowColumns 2026-07-28-00:00 (U12 — PR #2512 review, greptile P1):
     PRE-FLIGHT BEFORE COMMITTING. The ordering, not the message, is the fix.

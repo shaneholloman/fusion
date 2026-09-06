@@ -14,7 +14,7 @@
  * stays separate by design.
  */
 
-import { getBuiltinWorkflow, isBuiltinWorkflowId, resolveDefaultWorkflowIr } from "./builtin-workflows.js";
+import { getBuiltinWorkflow, isBuiltinWorkflowId, resolveDefaultWorkflowIr, resolveRetiredBuiltinWorkflowId } from "./builtin-workflows.js";
 import { parseWorkflowIr, serializeWorkflowIr } from "./workflow-ir.js";
 import { applyPromptOverridesToIr } from "./workflow-prompt-overrides.js";
 import type { WorkflowIr } from "./workflow-ir-types.js";
@@ -181,9 +181,14 @@ export async function resolveTaskPlanningPrompt(
  */
 export async function resolveWorkflowIrById(
   store: Pick<WorkflowIrResolverStore, "getWorkflowDefinition"> & Partial<Pick<WorkflowIrResolverStore, "getWorkflowSettingsProjectId" | "getWorkflowPromptOverrides" | "getWorkflowPromptOverridesAsync">>,
-  workflowId: string,
+  requestedWorkflowId: string,
   irCache?: Map<string, WorkflowIr>,
 ): Promise<WorkflowIr> {
+  /*
+  FNXC:WorkflowSuccession 2026-09-06-02:15:
+  Resolve retired identities before cache, catalog and override access so an alias cannot split runtime IR or project configuration into a second namespace.
+  */
+  const workflowId = resolveRetiredBuiltinWorkflowId(requestedWorkflowId);
   let projectId: string | undefined;
   try {
     projectId = store.getWorkflowSettingsProjectId?.();

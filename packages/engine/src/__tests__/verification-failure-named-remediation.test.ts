@@ -5,7 +5,7 @@ step succeeds and BEFORE the in-review handoff. When it goes red, the executor m
 work to do. These tests pin which bounce shape each `stepReopenPolicy` gets, because the two are not
 interchangeable and picking the wrong one silently discards the measurement:
 
-  - `reopen-trailing` (builtin:coding, builtin:coding-ideas) reopens the trailing completed step.
+  - `reopen-trailing` is retained by builtin:coding and by the composition-base IR asserted below.
   - `none` (builtin:coding-ideas-v2) forbids reopening, so remediation must ARRIVE as appended steps.
 
 The defect: `none` reached `sendTaskBackForFix` all the same, which reopens nothing under that

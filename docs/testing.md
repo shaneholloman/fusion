@@ -453,7 +453,7 @@ reviewable. New test ids never fail the diff.
 the FN-175/FN-177 class: merge admission before a Code Review verdict, a failed card
 whose branch has already landed, and cleanup that removes a live executor worktree.
 It drives disposable local Git repositories, a throwaway PostgreSQL store, the real
-built-in Coding (Ideas) and Coding workflow definitions, real merger admission, and
+built-in Coding (Ideas) and Coding (Auto) workflow definitions, real merger admission, and
 deterministic mock-provider scripts under `testMode: true`.
 
 Prerequisites are Git and reachable test PostgreSQL. Start the latter with
@@ -500,6 +500,9 @@ remediation drive) plus S05 extended to `builtin:coding-ideas-v2`, one of the lo
 the matrix. Five consecutive runs measured 140.1s, 143.8s, 146.7s, 147.0s and 148.4s — green against
 the old 150s ceiling, but with under 2s of headroom, which is a flake waiting to happen rather than
 a passing lane. Third precedent for the same rule: growth must be nameable, or it is a regression.
+
+FNXC:WorkflowSuccession 2026-09-06-02:15:
+FN-297 removes the retired Ideas workflow from the 19 scenario matrices because its compatibility alias resolves the same surviving graph. The workload decreases by one duplicate workflow execution per affected scenario, while 175 seconds remains a ceiling rather than a target or a reason to conceal future regressions.
 -->
 The declared budget is **175 seconds**, rounded up from a measured 148,434ms slowest full-matrix
 run (7 files, 90 tests) after the Code Review remediation drive was added and S05 was extended to

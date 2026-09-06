@@ -585,11 +585,12 @@ export {
   stepToFragmentIr,
   layoutForIr,
 } from "./workflows/workflow-steps-to-ir.js";
-export { DEPRECATED_BUILTIN_WORKFLOW_IDS } from "./types.js";
+export { DEPRECATED_BUILTIN_WORKFLOW_IDS, RETIRED_BUILTIN_WORKFLOW_SUCCESSORS } from "./types.js";
 export {
   BUILTIN_WORKFLOWS,
   BUILTIN_WORKFLOW_ID_PREFIX,
   getBuiltinWorkflow,
+  resolveRetiredBuiltinWorkflowId,
   getRequiredPluginIdForBuiltinWorkflow,
   isBuiltinWorkflowId,
   isBuiltinWorkflowPluginGated,

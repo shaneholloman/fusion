@@ -30,7 +30,7 @@ function resolveCodingWorkflow(): void {
   vi.mocked(dashboardApi.fetchBoardWorkflows).mockResolvedValue({
     flagEnabled: true,
     defaultWorkflowId: "builtin:coding",
-    workflows: [{ id: "builtin:coding", name: "Coding (Ideas) V2", columns: [], fields: [] }],
+    workflows: [{ id: "builtin:coding", name: "Coding (Auto)", columns: [], fields: [] }],
     taskWorkflowIds: {},
   });
 }
@@ -79,7 +79,7 @@ describe("Task Detail metadata relocation", () => {
     expect(section).not.toBeNull();
     expect(await within(section!).findByText("Created via Dashboard")).toBeInTheDocument();
     expect(section?.querySelector(".detail-timestamps")).toBeInTheDocument();
-    expect(within(section!).getByTestId("task-detail-workflow-badge")).toHaveTextContent("Coding (Ideas) V2");
+    expect(within(section!).getByTestId("task-detail-workflow-badge")).toHaveTextContent("Coding (Auto)");
     expect(section?.nextElementSibling).toHaveClass("detail-section--original-prompt");
   });
 

@@ -1,6 +1,6 @@
 /*
 FNXC:VerificationRemediation 2026-08-26-05:56:
-The operator contract for Coding (Ideas) V2, stated as behaviour a card shows:
+The operator contract for the surviving Coding (Ideas) workflow, stated as behaviour a card shows:
 
   - A failing test INSIDE a step is the step's own problem. The executor fixes it there, and it must
     never become a separate fix step \u2014 otherwise every red test during implementation would litter
@@ -344,8 +344,8 @@ describe("fix steps appear on the card when a gate fails", () => {
     expect(sendTaskBackForFix).not.toHaveBeenCalled();
   });
 
-  it("derives named remediation for the inherited Coding (Ideas) workflow", async () => {
-    const { deps, task, pending } = harness("builtin:coding-ideas");
+  it("derives named remediation for the surviving Coding (Ideas) workflow", async () => {
+    const { deps, task, pending } = harness("builtin:coding-ideas-v2");
 
     await requestPreMergeOptionalStepFix(deps as never, task.id, task, {
       stepName: "Code Review",

@@ -7,7 +7,7 @@ GITHUB TRACKING WAS UNREACHABLE ON A RENAMED BOARD.
 all. On a board whose lanes are renamed it matched nothing, so the helper returned false for EVERY
 task and `showGithubTrackingSection` hid the section outright. The operator could not turn tracking on
 or off, with no error and no explanation. The only thing keeping it reachable was the unrelated
-`builtin:coding-ideas` escape hatch.
+Ideas-workflow escape hatch.
 
 WHY NO GATE SAW IT. The census counts COMPARISONS against legacy ids; this is a Set literal — a
 DEFINITION — consulted via `.has()`. Nothing in the backlog ever pointed here. Same blind spot that
