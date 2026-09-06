@@ -162,11 +162,9 @@ pgDescribe("TaskStore.bypassFailedPreMergeReviewStep", () => {
   });
 
   /*
-  FNXC:ReviewLaneBypass 2026-09-05-23:08:
-  FN-295: a gate archived by ANOTHER gate's remediation blocks the merge while `skipped`, so the
-  failed-row-only selection left the card with no exit at all. The waiver must also erase the archive
-  stamp, which `evaluatePreMergeApprovals` treats as an unconditional veto — otherwise the operator's
-  decision is recorded and the door stays shut.
+  FNXC:ReviewLaneBypass 2026-09-06-00:47:
+  An archived failure remains an audit carrier. FN-9266 preserves its archive provenance and permits
+  only the audited operator waiver to satisfy the merge gate.
   */
   it("bypasses a required gate archived by another gate's remediation", async () => {
     const archived = failedStep({
@@ -189,11 +187,11 @@ pgDescribe("TaskStore.bypassFailedPreMergeReviewStep", () => {
     expect(result).toMatchObject({
       status: "skipped",
       bypassedBy: "operator-archived",
-      bypassedFromStatus: "skipped",
+      bypassedFromStatus: "failed",
     });
     expect(result?.verdict).toBeUndefined();
-    expect(result?.remediationArchivedAt).toBeUndefined();
-    expect(result?.remediationArchivedFromStatus).toBeUndefined();
+    expect(result?.remediationArchivedAt).toBe("2026-09-04T19:28:37.579Z");
+    expect(result?.remediationArchivedFromStatus).toBe("failed");
   });
 
   it("rejects when there is no failed or enabled resultless pre-merge step", async () => {

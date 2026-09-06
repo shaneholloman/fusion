@@ -181,7 +181,7 @@ import {
 } from "./task-store/async/async-patchnode.js";
 import { buildPatchnodeEntryId, buildPatchnodeEntryInput } from "./board/patchnode.js";
 import type { PatchnodeEntry, PatchnodeQuery } from "./types/task/patchnode.js";
-import { resolveWorkflowIrForTask } from "./workflows/workflow-ir-resolver.js";
+import { resolveWorkflowIrForTask, type WorkflowSelectionCache, type WorkflowSelectionReadTally } from "./workflows/workflow-ir-resolver.js";
 // FNXC:RuntimeBackendAsync 2026-06-24-10:15:
 // Async helper imports for backend-mode (AsyncDataLayer/PostgreSQL) delegation.
 // persistence/allocator/settings/search/lifecycle/merge/archive helpers preserve
@@ -2525,8 +2525,8 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
           bypassedBy: actor,
           bypassedAt: now,
           bypassReason: reason,
-          bypassedFromStatus: rowTarget.status,
-          bypassedFromVerdict: rowTarget.verdict,
+          bypassedFromStatus: rowTarget.remediationArchivedFromStatus ?? rowTarget.status,
+          bypassedFromVerdict: rowTarget.verdict ?? rowTarget.priorAttempts?.[0]?.verdict,
         }
         : {
           workflowStepId: absentStepId!,
@@ -2540,14 +2540,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         };
       // A bypass never fabricates a reviewer verdict.
       delete bypassed.verdict;
-      /*
-      FNXC:ReviewLaneBypass 2026-09-05-23:08:
-      An audited human waiver supersedes an automatic remediation archive. Leaving the stamp made the
-      bypass INERT: `evaluatePreMergeApprovals` vetoes any row carrying `remediationArchivedAt`, so the
-      operator's explicit decision was recorded and the merge door stayed shut anyway.
-      */
-      delete bypassed.remediationArchivedAt;
-      delete bypassed.remediationArchivedFromStatus;
+      // Preserve archive provenance: the merge gate recognizes only the audited waiver as its exception.
 
       const nextResults = [...results];
       if (targetIndex === -1) nextResults.push(bypassed);
@@ -2575,8 +2568,8 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         metadata: {
           workflowStepId: target.workflowStepId,
           workflowStepName: target.workflowStepName,
-          bypassedFromStatus: target.status,
-          bypassedFromVerdict: failedTarget?.verdict ?? null,
+          bypassedFromStatus: bypassed.bypassedFromStatus,
+          bypassedFromVerdict: bypassed.bypassedFromVerdict ?? null,
           reason,
         },
       });
@@ -2661,9 +2654,16 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         );
       }
       if (target.status !== "pending") {
-        throw new Error(
-          `Cannot resume workflow step for ${id}: only pending steps can be resumed`,
-        );
+        const archivedFailure = target.remediationArchivedAt != null
+          && (target.remediationArchivedFromStatus === "failed" || target.remediationArchivedFromStatus === "advisory_failure")
+          && !target.bypassedBy
+          && !target.supersededAt;
+        /*
+        FNXC:StepResume 2026-09-06-00:47:
+        Resume must remain pending-only, but an archived failed carrier now has a supported audited
+        bypass path. Name it so the documented recovery chain does not dead-end after a crash archive.
+        */
+        throw new Error(`Cannot resume workflow step for ${id}: only pending steps can be resumed${archivedFailure ? ` (step '${stepId}' is an archived remediation carrier — use fn_task_bypass_review / POST /tasks/:id/bypass-review to clear it)` : ""}`);
       }
 
       const now = new Date().toISOString();

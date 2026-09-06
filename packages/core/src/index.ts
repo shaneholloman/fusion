@@ -535,12 +535,14 @@ export {
   unregisterStepParser,
   registerBuiltinStepParsers,
   parseStepHeadings,
+  matchStepHeadings,
   parseJsonSteps,
   resolveAuthoredStepHeadingOffset,
   __resetStepParserRegistryForTests,
 } from "./tasks/step-parsers.js";
 export type {
   StepParser,
+  StepHeadingMatch,
   StepParseResult,
   ParsedStep,
   StepParserRegistrationReason,
@@ -726,6 +728,7 @@ export {
   resolvePlanningPromptFromIr,
   resolveTaskSeamPrompt,
   resolveTaskPlanningPrompt,
+  prefetchWorkflowSelections,
   hashWorkflowIr,
   computeWorkflowIrPin,
   detectWorkflowDrift,
@@ -733,6 +736,7 @@ export {
   type WorkflowDriftReason,
   type WorkflowIrResolverStore,
   type WorkflowSelectionCache,
+  type WorkflowSelectionReadTally,
   type WorkflowSelection,
 } from "./workflows/workflow-ir-resolver.js";
 export {
@@ -1367,8 +1371,10 @@ export {
   collectLandedMemberReviewAdvisories,
   getTaskMergeBlocker,
   isPreMergeStepsNotRunBlocker,
+  isStaleContentApprovalBlocker,
   PreMergeStepsNotRunError,
   PRE_MERGE_STEPS_NOT_RUN_BLOCKER,
+  STALE_CONTENT_APPROVAL_BLOCKER,
   getTaskHardMergeBlocker,
   getMergeConfirmedFinalizationBlocker,
   getUnfinishedStepTitles,
