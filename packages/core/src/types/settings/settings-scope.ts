@@ -364,6 +364,11 @@ export interface GlobalSettings {
    */
   quickAddSubmitOnEnter?: boolean;
   /**
+   * FNXC:ChatComposer 2026-09-06-01:54:
+   * Cette préférence clavier reste globale uniquement afin qu’un projet partagé ne puisse jamais imposer le comportement d’un opérateur. Le mode `auto` insère un saut de ligne lorsque le pointeur primaire est tactile et envoie sinon ; le pointeur, plutôt que la largeur, préserve l’envoi par Entrée dans une fenêtre de bureau étroite pilotée à la souris. Le réglage gouverne uniquement Entrée sans Cmd/Ctrl ni Shift, après les branches d’autocomplétion, la garde Shift et, dans TaskChatTab, la garde de composition IME ; Cmd/Ctrl+Enter sans Shift ne le consulte jamais.
+   */
+  chatSubmitOnEnter?: "auto" | "always" | "never";
+  /**
    * FNXC:ChatSnippets 2026-09-03-15:56:
    * Reusable dashboard-chat prompts are a global operator preference because direct and task chats span projects. They use the existing global settings transport and need neither project persistence nor a dedicated route.
    */

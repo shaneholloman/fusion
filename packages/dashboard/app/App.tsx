@@ -74,6 +74,7 @@ import { ShellProvider } from "./context/ShellContext";
 import { RetryWarningProvider } from "./context/RetryWarningContext";
 import { CostBadgeProvider } from "./context/CostBadgeContext";
 import { ChatMessageLayoutProvider } from "./context/ChatMessageLayoutContext";
+import { ChatSubmitOnEnterProvider } from "./context/ChatSubmitOnEnterContext";
 import { ShellHostProvider, useShellHostContext } from "./context/ShellHostContext";
 import { useShellConnection } from "./hooks/useShellConnection";
 import { useStashOrphanCount } from "./hooks/useStashOrphanCount";
@@ -962,6 +963,7 @@ function AppInner() {
     dashboardKeyboardShortcuts,
     dismissModalsOnOutsideClick,
     quickAddSubmitOnEnter,
+    chatSubmitOnEnter,
     skipConfirmationDialogs,
     maxTotalRetriesBeforeFail,
     prAuthAvailable,
@@ -1969,6 +1971,7 @@ function AppInner() {
   return (
     <ConfirmDialogProvider skipConfirmations={skipConfirmationDialogs}>
       <ChatMessageLayoutProvider value={chatMessageLayout}>
+      <ChatSubmitOnEnterProvider value={chatSubmitOnEnter}>
       <ModalDismissPreferenceProvider enabled={dismissModalsOnOutsideClick}>
         <QuickAddSubmitOnEnterProvider enabled={quickAddSubmitOnEnter}>
       <NavigationHistoryProvider value={{ pushNav, replaceCurrent, removeNav }}>
@@ -2416,6 +2419,7 @@ function AppInner() {
       </NavigationHistoryProvider>
         </QuickAddSubmitOnEnterProvider>
       </ModalDismissPreferenceProvider>
+      </ChatSubmitOnEnterProvider>
       </ChatMessageLayoutProvider>
     </ConfirmDialogProvider>
   );

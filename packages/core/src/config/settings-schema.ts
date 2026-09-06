@@ -227,6 +227,11 @@ export const DEFAULT_GLOBAL_SETTINGS = {
   */
   quickAddSubmitOnEnter: true,
   /*
+  FNXC:ChatComposer 2026-09-06-01:54:
+  Le comportement automatique des trois composeurs insère une nouvelle ligne pour un pointeur tactile primaire et conserve l’envoi par Entrée avec une souris, y compris dans une fenêtre étroite. Cette préférence d’opérateur reste globale et ne s’applique qu’à Entrée sans Cmd/Ctrl ni Shift, après l’autocomplétion, Shift et la garde IME propre au Chat de tâche.
+  */
+  chatSubmitOnEnter: "auto",
+  /*
   FNXC:ChatSnippets 2026-09-03-15:56:
   Keep the optional global key present but undefined so scope-key derivation remains complete without sharing a mutable default array. readChatSnippets supplies a fresh effective empty list.
   */

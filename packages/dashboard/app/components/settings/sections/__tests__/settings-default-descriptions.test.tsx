@@ -88,6 +88,7 @@ const SETTING_DESCRIPTION_KEYS: Record<string, string> = {
   dismissModalsOnOutsideClick: "globalGeneral.dismissModalsByClickingOutsideHint",
   skipConfirmationDialogs: "globalGeneral.skipConfirmationDialogsHint",
   quickAddSubmitOnEnter: "globalGeneral.quickAddSubmitOnEnterHint",
+  chatSubmitOnEnter: "globalGeneral.chatSubmitOnEnterHint",
   persistAgentToolOutput: "globalGeneral.whenDisabledToolRowsAreStillLoggedBut",
   agentToolOutputMaxChars: "globalGeneral.agentToolOutputLimitHint",
   proactiveTaskChatEnabled: "globalGeneral.enableProactiveTaskChatHint",

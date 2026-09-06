@@ -71,6 +71,7 @@ import { buildChatReportHandoff, type ChatReportHandoff } from "./chatReportHand
 import { matchChatCommand, filterChatCommands, getSlashTriggerMatch, selectChatCommands, type ChatCommand } from "./chat-commands";
 import { applySnippetToDraft, filterChatSnippets, matchStandaloneSnippetInvocation } from "./chat-snippets";
 import { useChatMessageLayout } from "../context/ChatMessageLayoutContext";
+import { useChatEnterSubmits } from "../context/ChatSubmitOnEnterContext";
 import {
   createChatInputAutosizeController,
   type ChatInputAutosizeController,
@@ -373,6 +374,7 @@ type CopyFeedbackState = "success" | "error" | null;
 export function ChatView({ projectId, addToast, floating = false, compactLayout = false, findActive = true, active = true, onPopOut, onMaximize, onClose, onOpenSessionInNewWindow, initialDirectSession, initialDirectSessionNonce, persistChatPreferences = true, chatCommandContext, initialComposerDraft, initialComposerDraftNonce, onSendAsReport }: ChatViewProps) {
   const { t } = useTranslation("app");
   const chatMessageLayout = useChatMessageLayout();
+  const enterSubmits = useChatEnterSubmits();
   useEffect(() => {
     recordResumeEvent({
       view: "ChatView",
@@ -2109,7 +2111,17 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
         return;
       }
 
+      /*
+      FNXC:ChatComposer 2026-09-06-01:54:
+      `Shift+Enter` n'envoie jamais, y compris combiné à `Cmd/Ctrl` : `Cmd/Ctrl+Shift+Enter` n'est pas un envoi. Elle insère un saut de ligne, sauf dans le Chat lorsqu'un menu d'autocomplétion est ouvert — les trois menus du Chat (fichiers/tâches, agents, compétences) la consomment alors sans insérer de saut de ligne. Dans le Chat de tâche et le Chat du planificateur, `Shift+Enter` traverse le menu et insère bien un saut de ligne.
+      `Cmd/Ctrl+Enter` sans `Shift` envoie, indépendamment du réglage `chatSubmitOnEnter` et du type de pointeur.
+      `Entrée` sans `Cmd/Ctrl` ni `Shift` est gouvernée par `chatSubmitOnEnter` ; `Alt` n'est pas un modificateur d'envoi et ne change rien à cette règle.
+      Les règles 2 et 3 s'appliquent lorsqu'aucun menu d'autocomplétion n'est ouvert. Un menu ouvert a la priorité et consomme `Entrée` comme `Cmd/Ctrl+Enter` ; `Échap` ferme le menu et rétablit les règles.
+      Dans le Chat de tâche uniquement, une composition IME en cours (saisie CJK) court-circuite tout, `Cmd/Ctrl+Enter` compris, jusqu'à la validation du candidat.
+      Le bouton d'envoi reste rendu et actif dès que le brouillon n'est pas vide — menu ouvert et composition IME compris. Sur brouillon vide il est désactivé, comme aujourd'hui.
+      */
       if (e.key === "Enter" && !e.shiftKey) {
+        if (!(e.metaKey || e.ctrlKey) && !enterSubmits) return;
         e.preventDefault();
         void handleSendDispatch();
       }
@@ -2126,6 +2138,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
       handleSnippetSelect,
       handleCommandSelect,
       handleSendDispatch,
+      enterSubmits,
       fileMention,
       insertHashMention,
       messageInput,
@@ -3110,6 +3123,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
             value={messageInput}
             onChange={handleInputChange}
             onKeyDown={handleInputKeyDown}
+            enterKeyHint={enterSubmits ? "send" : "enter"}
             onKeyUp={handleInputKeyUp}
             onClick={handleInputSelectionChange}
             onBlur={handleInputBlur}

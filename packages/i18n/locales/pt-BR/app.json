@@ -6717,7 +6717,12 @@
       "channelStable": "Stable (recomendado)",
       "channelBeta": "Beta — builds iniciais da main",
       "quickAddSubmitOnEnter": "",
-      "quickAddSubmitOnEnterHint": ""
+      "quickAddSubmitOnEnterHint": "",
+      "chatSubmitOnEnter": "",
+      "chatSubmitOnEnterHint": "",
+      "chatSubmitOnEnterAuto": "",
+      "chatSubmitOnEnterAlways": "",
+      "chatSubmitOnEnterNever": ""
     },
     "nodeSync": {
       "alwaysAsk": "Sempre perguntar",

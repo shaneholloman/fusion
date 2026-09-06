@@ -6211,7 +6211,12 @@
       "noLimitOnAgentToolOutput": "",
       "noLimitOnAgentToolOutputHint": "",
       "quickAddSubmitOnEnter": "",
-      "quickAddSubmitOnEnterHint": ""
+      "quickAddSubmitOnEnterHint": "",
+      "chatSubmitOnEnter": "",
+      "chatSubmitOnEnterHint": "",
+      "chatSubmitOnEnterAuto": "",
+      "chatSubmitOnEnterAlways": "",
+      "chatSubmitOnEnterNever": ""
     },
     "globalModels": {
       "modelOverrides": "",
