@@ -3115,7 +3115,11 @@
     "viewProjects": "프로젝트 보기",
     "viewUsage": "사용량 보기",
     "workflows": "워크플로",
-    "workingBranch": "작업 브랜치"
+    "workingBranch": "작업 브랜치",
+    "unreadArtifacts_one": "",
+    "unreadArtifacts_other": "",
+    "unreadRecommendations_one": "",
+    "unreadRecommendations_other": ""
   },
   "health": {
     "activeTasks": "활성 작업",
@@ -4212,7 +4216,14 @@
     "todos": "할 일",
     "usage": "사용량",
     "workflows": "워크플로",
-    "patchnode": ""
+    "patchnode": "",
+    "artifactsUnreadAriaLabel_one": "",
+    "artifactsUnreadAriaLabel_other": "",
+    "artifactsUnreadDotAriaLabel": "",
+    "recommendations": "",
+    "recommendationsUnreadAriaLabel_one": "",
+    "recommendationsUnreadAriaLabel_other": "",
+    "recommendationsUnreadDotAriaLabel": ""
   },
   "newTaskModal": {
     "addDependencies": "의존성 추가",
@@ -9805,5 +9816,23 @@
     "lines": "lines",
     "showLess": "Show less",
     "showMore": "Show more ({{count}} {{lineLabel}})"
+  },
+  "recommendations": {
+    "count": "",
+    "createError": "",
+    "createTask": "",
+    "created": "",
+    "creating": "",
+    "emptyDescription": "",
+    "emptyTitle": "",
+    "loadError": "",
+    "loadMore": "",
+    "loading": "",
+    "loadingMore": "",
+    "retryCreate": "",
+    "source": "",
+    "title": "",
+    "truncated": "",
+    "viewTask": ""
   }
 }

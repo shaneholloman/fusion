@@ -3115,7 +3115,11 @@
     "viewProjects": "查看项目",
     "viewUsage": "查看用量",
     "workflows": "工作流",
-    "workingBranch": "工作分支"
+    "workingBranch": "工作分支",
+    "unreadArtifacts_one": "",
+    "unreadArtifacts_other": "",
+    "unreadRecommendations_one": "",
+    "unreadRecommendations_other": ""
   },
   "health": {
     "activeTasks": "活动任务",
@@ -4212,7 +4216,14 @@
     "todos": "待办",
     "usage": "用量",
     "workflows": "工作流",
-    "patchnode": ""
+    "patchnode": "",
+    "artifactsUnreadAriaLabel_one": "",
+    "artifactsUnreadAriaLabel_other": "",
+    "artifactsUnreadDotAriaLabel": "",
+    "recommendations": "",
+    "recommendationsUnreadAriaLabel_one": "",
+    "recommendationsUnreadAriaLabel_other": "",
+    "recommendationsUnreadDotAriaLabel": ""
   },
   "newTaskModal": {
     "addDependencies": "添加依赖项",
@@ -9805,5 +9816,23 @@
     "lines": "lines",
     "showLess": "Show less",
     "showMore": "Show more ({{count}} {{lineLabel}})"
+  },
+  "recommendations": {
+    "count": "",
+    "createError": "",
+    "createTask": "",
+    "created": "",
+    "creating": "",
+    "emptyDescription": "",
+    "emptyTitle": "",
+    "loadError": "",
+    "loadMore": "",
+    "loading": "",
+    "loadingMore": "",
+    "retryCreate": "",
+    "source": "",
+    "title": "",
+    "truncated": "",
+    "viewTask": ""
   }
 }

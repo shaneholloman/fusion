@@ -3115,7 +3115,11 @@
     "viewProjects": "Ver proyectos",
     "viewUsage": "Ver uso",
     "workflows": "Flujos de trabajo",
-    "workingBranch": "Rama de trabajo"
+    "workingBranch": "Rama de trabajo",
+    "unreadArtifacts_one": "",
+    "unreadArtifacts_other": "",
+    "unreadRecommendations_one": "",
+    "unreadRecommendations_other": ""
   },
   "health": {
     "activeTasks": "Tareas activas",
@@ -4213,7 +4217,14 @@
     "todos": "Pendientes",
     "usage": "Uso",
     "workflows": "Flujos de trabajo",
-    "patchnode": ""
+    "patchnode": "",
+    "artifactsUnreadAriaLabel_one": "",
+    "artifactsUnreadAriaLabel_other": "",
+    "artifactsUnreadDotAriaLabel": "",
+    "recommendations": "",
+    "recommendationsUnreadAriaLabel_one": "",
+    "recommendationsUnreadAriaLabel_other": "",
+    "recommendationsUnreadDotAriaLabel": ""
   },
   "newTaskModal": {
     "addDependencies": "Añadir dependencias",
@@ -9806,5 +9817,23 @@
     "lines": "lines",
     "showLess": "Show less",
     "showMore": "Show more ({{count}} {{lineLabel}})"
+  },
+  "recommendations": {
+    "count": "",
+    "createError": "",
+    "createTask": "",
+    "created": "",
+    "creating": "",
+    "emptyDescription": "",
+    "emptyTitle": "",
+    "loadError": "",
+    "loadMore": "",
+    "loading": "",
+    "loadingMore": "",
+    "retryCreate": "",
+    "source": "",
+    "title": "",
+    "truncated": "",
+    "viewTask": ""
   }
 }

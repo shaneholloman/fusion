@@ -853,7 +853,14 @@ function AppInner() {
   useMobileViewportRestoreReset(isMobile);
 
   // App-level mailbox/chat unread state (used for header/mobile nav badges)
-  const { mailboxUnreadCount, mailboxPendingApprovalCount, setMailboxUnreadCount } = useMailboxUnread(currentProject?.id);
+  const {
+    mailboxUnreadCount,
+    recommendationUnreadCount,
+    artifactUnreadCount,
+    mailboxPendingApprovalCount,
+    setMailboxUnreadCount,
+    markCategorySeen: onMarkCategorySeen,
+  } = useMailboxUnread(currentProject?.id);
   const { chatHasUnreadResponse } = useChatUnreadBadge(currentProject?.id, { taskView, quickChatOpen });
   const { stashOrphanCount } = useStashOrphanCount(currentProject?.id);
   const [showGitHubStarPrompt, setShowGitHubStarPrompt] = useState(false);
@@ -1810,6 +1817,9 @@ function AppInner() {
     onSendAsReport: handleSendChatMessageAsReport,
     onOpenChatWithPrefill: openChatWithPrefill,
     setMailboxUnreadCount,
+    recommendationUnreadCount,
+    artifactUnreadCount,
+    onMarkCategorySeen,
     setMissionTargetId,
     setMissionResumeSessionId,
     setMilestoneSliceResumeSessionId,
@@ -1994,6 +2004,8 @@ function AppInner() {
         onOpenActivityLog={openActivityLogWithNav}
         onOpenMailbox={() => handleTaskViewChange("mailbox")}
         mailboxUnreadCount={mailboxUnreadCount}
+        recommendationUnreadCount={recommendationUnreadCount}
+        artifactUnreadCount={artifactUnreadCount}
         mailboxPendingApprovalCount={mailboxPendingApprovalCount}
         chatHasUnreadResponse={chatHasUnreadResponse}
         stashOrphanCount={stashOrphanCount}
@@ -2067,7 +2079,9 @@ function AppInner() {
             onChangeView={handleTaskViewChange}
             onNewTask={openNewTaskWithNav}
             onOpenSettings={openSettingsWithNav}
-                mailboxUnreadCount={mailboxUnreadCount}
+            mailboxUnreadCount={mailboxUnreadCount}
+            recommendationUnreadCount={recommendationUnreadCount}
+            artifactUnreadCount={artifactUnreadCount}
             mailboxPendingApprovalCount={mailboxPendingApprovalCount}
             chatHasUnreadResponse={chatHasUnreadResponse}
             planningNeedsInput={planningNeedsInput}
@@ -2169,6 +2183,8 @@ function AppInner() {
         onOpenActivityLog={openActivityLogWithNav}
         onOpenMailbox={() => handleTaskViewChange("mailbox")}
         mailboxUnreadCount={mailboxUnreadCount}
+        recommendationUnreadCount={recommendationUnreadCount}
+        artifactUnreadCount={artifactUnreadCount}
         mailboxPendingApprovalCount={mailboxPendingApprovalCount}
         chatHasUnreadResponse={chatHasUnreadResponse}
         stashOrphanCount={stashOrphanCount}

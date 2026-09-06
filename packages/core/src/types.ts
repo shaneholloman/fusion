@@ -1466,11 +1466,24 @@ import {
   normalizeMessageParticipant,
   resolveEphemeralTaskCreationPolicy,
 } from "./types/messaging/messages.js";
+import {
+  ARTIFACT_NOTICE_METADATA_KEY,
+  DASHBOARD_INBOX_CATEGORIES,
+  TASK_RECOMMENDATION_NOTICE_KIND,
+  classifyDashboardInboxMessage,
+  isDashboardInboxCategory,
+} from "./messaging/inbox-categories.js";
 export {
   DASHBOARD_USER_ID,
   normalizeMessageParticipant,
   resolveEphemeralTaskCreationPolicy,
+  ARTIFACT_NOTICE_METADATA_KEY,
+  DASHBOARD_INBOX_CATEGORIES,
+  TASK_RECOMMENDATION_NOTICE_KIND,
+  classifyDashboardInboxMessage,
+  isDashboardInboxCategory,
 };
+import type { DashboardInboxCategory } from "./messaging/inbox-categories.js";
 import type {
   ParticipantType,
   MessageType,
@@ -1487,6 +1500,7 @@ import type {
   MessageFilter,
 } from "./types/messaging/messages.js";
 export type {
+  DashboardInboxCategory,
   ParticipantType,
   MessageType,
   MessageReplyReference,

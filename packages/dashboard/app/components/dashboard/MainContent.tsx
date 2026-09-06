@@ -11,6 +11,7 @@ import { applyLocalTaskPatch, mergeTaskSnapshot } from "../../hooks/useTasks";
 import { ProjectOverview } from "../ProjectOverview";
 import { MissionManager } from "../MissionManager";
 import { MailboxView } from "../MailboxView";
+import { RecommendationsView } from "../RecommendationsView";
 import { IdeationPanel } from "../command-center/IdeationPanel";
 import type { NativeStructureCandidate } from "../MessageComposer";
 import { PageErrorBoundary } from "../ErrorBoundary";
@@ -101,6 +102,9 @@ export function MainContent(props: MainContentProps) {
   mailComposerPrefill,
   onOpenChatWithPrefill,
   setMailboxUnreadCount,
+  recommendationUnreadCount,
+  artifactUnreadCount,
+  onMarkCategorySeen,
   setMissionTargetId,
   setMissionResumeSessionId,
   setMilestoneSliceResumeSessionId,
@@ -539,6 +543,24 @@ export function MainContent(props: MainContentProps) {
   }
 
 
+  if (taskView === "recommendations") {
+    return (
+      <PageErrorBoundary>
+        <RecommendationsView
+          projectId={currentProject?.id}
+          addToast={addToast}
+          unreadCount={recommendationUnreadCount}
+          onSeen={() => void onMarkCategorySeen("recommendation")}
+          onOpenTask={(taskId) => {
+            void fetchTaskDetail(taskId, currentProject?.id)
+              .then((task) => popOutTaskDetail(task))
+              .catch(() => addToast?.("Failed to open task", "error"));
+          }}
+        />
+      </PageErrorBoundary>
+    );
+  }
+
   if (taskView === "missions") {
     return (
       <PageErrorBoundary>
@@ -622,6 +644,8 @@ export function MainContent(props: MainContentProps) {
             onOpenDetail={openDetailTask}
             onOpenArtifactTaskDetail={popOutTaskDetail}
             onSendSelectionToTask={modalManager.openNewTaskWithDescription}
+            artifactUnreadCount={artifactUnreadCount}
+            onSeen={() => void onMarkCategorySeen("artifact")}
           />
         </Suspense>
       </PageErrorBoundary>

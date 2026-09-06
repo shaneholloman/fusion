@@ -1,6 +1,6 @@
 import type { Request } from "express";
 import { resolve } from "node:path";
-import { ApprovalRequestStore, DASHBOARD_USER_ID, MessageStore, type MessageType, type ParticipantType, validateMessageMetadata } from "@fusion/core";
+import { ApprovalRequestStore, DASHBOARD_USER_ID, MessageStore, isDashboardInboxCategory, type DashboardInboxCategory, type MessageType, type ParticipantType, validateMessageMetadata } from "@fusion/core";
 import { ApiError, badRequest, notFound } from "../api-error.js";
 import { getTerminalService } from "../terminal-service.js";
 import type { ApiRoutesContext } from "./types.js";
@@ -229,19 +229,39 @@ export function registerMessagingScriptRoutes(ctx: ApiRoutesContext): void {
     return undefined;
   }
 
+  async function resolveCategoryUnreadCounts(
+    msgStore: MessageStore,
+  ): Promise<Record<DashboardInboxCategory, number> | undefined> {
+    const reader = (msgStore as Partial<MessageStore>).getDashboardInboxCategoryCounts;
+    if (typeof reader !== "function") return undefined;
+    try {
+      return await reader.call(msgStore, DASHBOARD_USER_ID, "user");
+    } catch {
+      return undefined;
+    }
+  }
+
   router.get("/messages/inbox", async (req, res) => {
     try {
       const msgStore = await getMessageStore(req);
+      const category = isDashboardInboxCategory(req.query.category) ? req.query.category : undefined;
       const filter = {
         limit: parseInt(req.query.limit as string) || 20,
         offset: parseInt(req.query.offset as string) || 0,
         read: req.query.unreadOnly === "true" ? false : undefined,
         archived: req.query.archived === "true",
         type: req.query.type as MessageType | undefined,
+        ...(category ? { category } : {}),
       };
       const messages = await msgStore.getInbox(DASHBOARD_USER_ID, "user", filter);
       const mailbox = await msgStore.getMailbox(DASHBOARD_USER_ID, "user");
-      res.json({ messages, total: messages.length, unreadCount: mailbox.unreadCount });
+      const categoryUnreadCounts = await resolveCategoryUnreadCounts(msgStore);
+      res.json({
+        messages,
+        total: messages.length,
+        unreadCount: mailbox.unreadCount,
+        ...(categoryUnreadCounts ? { categoryUnreadCounts } : {}),
+      });
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         throw err;
@@ -282,7 +302,12 @@ export function registerMessagingScriptRoutes(ctx: ApiRoutesContext): void {
       } catch {
         pendingApprovalCount = 0;
       }
-      res.json({ unreadCount: mailbox.unreadCount, pendingApprovalCount });
+      const categoryUnreadCounts = await resolveCategoryUnreadCounts(msgStore);
+      res.json({
+        unreadCount: mailbox.unreadCount,
+        pendingApprovalCount,
+        ...(categoryUnreadCounts ? { categoryUnreadCounts } : {}),
+      });
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         throw err;
@@ -295,7 +320,10 @@ export function registerMessagingScriptRoutes(ctx: ApiRoutesContext): void {
   router.post("/messages/read-all", async (req, res) => {
     try {
       const msgStore = await getMessageStore(req);
-      const count = await msgStore.markAllAsRead(DASHBOARD_USER_ID, "user");
+      const category = isDashboardInboxCategory(req.body?.category) ? req.body.category : undefined;
+      const count = category
+        ? await msgStore.markAllAsRead(DASHBOARD_USER_ID, "user", category)
+        : await msgStore.markAllAsRead(DASHBOARD_USER_ID, "user");
       res.json({ markedAsRead: count });
     } catch (err: unknown) {
       if (err instanceof ApiError) {

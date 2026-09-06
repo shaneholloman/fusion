@@ -445,6 +445,109 @@ describe("DocumentsView", () => {
     expect(screen.getByRole("button", { name: "Open docs/guide.md" })).toBeInTheDocument();
   });
 
+  it("marks artifact notices seen once when the Artifacts landing tab opens", () => {
+    const onSeen = vi.fn();
+
+    render(
+      <DocumentsView
+        addToast={addToast}
+        onOpenDetail={onOpenDetail}
+        artifactUnreadCount={3}
+        onSeen={onSeen}
+      />,
+    );
+
+    expect(onSeen).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mark artifact notices seen when the unread count is zero", () => {
+    const onSeen = vi.fn();
+
+    render(
+      <DocumentsView
+        addToast={addToast}
+        onOpenDetail={onOpenDetail}
+        artifactUnreadCount={0}
+        onSeen={onSeen}
+      />,
+    );
+
+    expect(onSeen).not.toHaveBeenCalled();
+  });
+
+  it("does not mark artifact notices seen again for rerenders or tab changes within one project visit", () => {
+    const onSeen = vi.fn();
+    const view = (
+      <DocumentsView
+        projectId="proj-a"
+        addToast={addToast}
+        onOpenDetail={onOpenDetail}
+        artifactUnreadCount={3}
+        onSeen={onSeen}
+      />
+    );
+    const { rerender } = render(view);
+
+    expect(onSeen).toHaveBeenCalledTimes(1);
+    rerender(view);
+    fireEvent.click(screen.getByRole("tab", { name: /show project markdown files/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /show artifacts/i }));
+
+    expect(onSeen).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-arms artifact notice consumption when the mounted view changes project", () => {
+    const onSeen = vi.fn();
+    const { rerender } = render(
+      <DocumentsView
+        projectId="proj-a"
+        addToast={addToast}
+        onOpenDetail={onOpenDetail}
+        artifactUnreadCount={3}
+        onSeen={onSeen}
+      />,
+    );
+
+    expect(onSeen).toHaveBeenCalledTimes(1);
+    rerender(
+      <DocumentsView
+        projectId="proj-b"
+        addToast={addToast}
+        onOpenDetail={onOpenDetail}
+        artifactUnreadCount={2}
+        onSeen={onSeen}
+      />,
+    );
+
+    expect(onSeen).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats an undefined project as a visit before re-arming for a selected project", () => {
+    const onSeen = vi.fn();
+    const { rerender } = render(
+      <DocumentsView
+        projectId={undefined}
+        addToast={addToast}
+        onOpenDetail={onOpenDetail}
+        artifactUnreadCount={1}
+        onSeen={onSeen}
+      />,
+    );
+
+    expect(onSeen).toHaveBeenCalledTimes(1);
+    rerender(
+      <DocumentsView
+        projectId="proj-a"
+        addToast={addToast}
+        onOpenDetail={onOpenDetail}
+        artifactUnreadCount={1}
+        onSeen={onSeen}
+      />,
+    );
+
+    expect(onSeen).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps hidden project files off by default and reveals them when toggled on", async () => {
     const refreshMock = vi.fn().mockResolvedValue(undefined);
 

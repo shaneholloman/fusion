@@ -111,6 +111,8 @@ const createDefaultProps = () => ({
   onOpenActivityLog: vi.fn(),
   onOpenMailbox: vi.fn(),
   mailboxUnreadCount: 0,
+  recommendationUnreadCount: 0,
+  artifactUnreadCount: 0,
   mailboxPendingApprovalCount: 0,
   onOpenGitManager: vi.fn(),
   onOpenWorkflowEditor: vi.fn(),
@@ -153,6 +155,31 @@ describe("MobileNavBar", () => {
 
     fireEvent.click(screen.getByTestId("mobile-nav-tab-more"));
     expect(screen.getByTestId("mobile-more-item-skills")).toBeDefined();
+  });
+
+  it("shows recommendation and artifact badges in primary tabs and the More sheet", () => {
+    const primary = render(
+      <MobileNavBar
+        {...createDefaultProps()}
+        recommendationUnreadCount={7}
+        artifactUnreadCount={120}
+        mobileNavPrimaryItems={["recommendations", "documents"]}
+      />,
+    );
+    expect(screen.getByTestId("mobile-nav-tab-recommendations").querySelector(".mobile-nav-tab-badge")).toHaveTextContent("7");
+    expect(screen.getByTestId("mobile-nav-tab-documents").querySelector(".mobile-nav-tab-badge")).toHaveTextContent("99+");
+    primary.unmount();
+
+    render(
+      <MobileNavBar
+        {...createDefaultProps()}
+        recommendationUnreadCount={7}
+        artifactUnreadCount={120}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("mobile-nav-tab-more"));
+    expect(screen.getByTestId("mobile-more-item-recommendations").querySelector(".mobile-more-item-badge")).toHaveTextContent("7");
+    expect(screen.getByTestId("mobile-more-item-documents").querySelector(".mobile-more-item-badge")).toHaveTextContent("99+");
   });
 
   it("promotes Planning and routes demoted Missions to More without an empty tab", () => {

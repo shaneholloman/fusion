@@ -59,6 +59,8 @@ export interface DocumentsViewProps {
   onOpenDetail: (task: TaskDetail) => void;
   onOpenArtifactTaskDetail?: (task: TaskDetail) => void;
   onSendSelectionToTask?: (description: string) => void;
+  artifactUnreadCount?: number;
+  onSeen?: () => void;
 }
 
 function formatTimestamp(iso?: string): string {
@@ -250,7 +252,7 @@ function TaskArtifactInlineViewer({ artifact, projectId, content, loading, error
   );
 }
 
-export function DocumentsView({ projectId, columnFlagsByTaskId, addToast, onOpenDetail, onOpenArtifactTaskDetail, onSendSelectionToTask }: DocumentsViewProps) {
+export function DocumentsView({ projectId, columnFlagsByTaskId, addToast, onOpenDetail, onOpenArtifactTaskDetail, onSendSelectionToTask, artifactUnreadCount = 0, onSeen }: DocumentsViewProps) {
   const { t } = useTranslation("app");
   // FNXC:ArtifactsView 2026-07-11-11:30: Artifacts is the first tab and the landing tab — the view is the artifact gallery first, with project files and task documents as secondary tabs.
   const [activeTab, setActiveTab] = useState<DocumentsTab>("artifacts");
@@ -300,6 +302,11 @@ export function DocumentsView({ projectId, columnFlagsByTaskId, addToast, onOpen
   const [artifactDocError, setArtifactDocError] = useState<string | null>(null);
   const [renderArtifactMarkdown, setRenderArtifactMarkdown] = useState(true);
   const artifactDocRequestIdRef = useRef(0);
+  /*
+  FNXC:ArtifactsView 2026-09-06-03:16:
+  Opening the Artifacts landing tab consumes that project's artifact-notice badge exactly once per visit. MainContent keeps the component mounted while projectId changes, so the nullable latch records the signalled project—including undefined as a real value—and re-arms only when the selected project changes.
+  */
+  const seenProjectRef = useRef<{ projectId: string | undefined } | null>(null);
   /*
   FNXC:DocumentsView 2026-07-11-14:45:
   Operator requirement: Project Files must be editable in place too (same CodeMirror FileEditor), replacing the former Read-only badge contract. Saves go through the workspace file API for the "project" workspace and update the local preview content on success.
@@ -357,6 +364,17 @@ export function DocumentsView({ projectId, columnFlagsByTaskId, addToast, onOpen
       window.removeEventListener("resize", updateMobile);
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      artifactUnreadCount > 0
+      && activeTab === "artifacts"
+      && (seenProjectRef.current === null || seenProjectRef.current.projectId !== projectId)
+    ) {
+      seenProjectRef.current = { projectId };
+      onSeen?.();
+    }
+  }, [activeTab, artifactUnreadCount, onSeen, projectId]);
 
   useEffect(() => {
     setActiveTab("artifacts");

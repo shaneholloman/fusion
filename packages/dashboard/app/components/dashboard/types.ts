@@ -12,6 +12,7 @@ import type {
   CapacityRiskSignal,
   ColorTheme,
   ColumnId,
+  DashboardInboxCategory,
   GithubIssueAction,
   MergeResult,
   Task,
@@ -158,6 +159,9 @@ export interface MainContentProps {
   onSendAsReport?: (handoff: ChatReportHandoff) => void;
   onOpenChatWithPrefill?: (prefillText: string) => void;
   setMailboxUnreadCount: (count: number) => void;
+  recommendationUnreadCount: number;
+  artifactUnreadCount: number;
+  onMarkCategorySeen: (category: DashboardInboxCategory) => Promise<void>;
   setMissionTargetId: Dispatch<SetStateAction<string | undefined>>;
   setMissionResumeSessionId: Dispatch<SetStateAction<string | undefined>>;
   setMilestoneSliceResumeSessionId: Dispatch<SetStateAction<string | undefined>>;
