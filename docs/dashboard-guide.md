@@ -132,6 +132,11 @@ Press `Escape` to close the current/topmost VISIBLE dashboard popup. Popped-out 
 
 Thinking panes split titled reasoning traces with captured bodies into independently expandable sections, with **Collapse all** and **Expand all** controls. Responses-family models now request titled sections with their reasoning bodies. A titles-only trace can still arrive from a provider Fusion cannot configure; those headings stay inline in the flowing trace instead of becoming empty collapsible rows, and the defensive empty-state label appears at most once per section. **Raw trace** shows the original unsectioned capture and switches back with **Sectioned trace**; use it to diagnose a provider-side titles-only payload. The workflow live-log console remains raw and unsectioned by design. The same behavior applies while Planning Mode, Mission Interview, and Milestone/Slice Interview stream a generation.
 
+### Chat scrolling
+
+<!-- FNXC:ChatScrollAnchorDocs 2026-09-06-07:42: FN-302 preserves the reader’s viewport on send and makes manual scrolling the immediate authority over automatic bottom following. -->
+When a conversation is already at its latest message, Chat follows new messages and every in-progress response update at the bottom. Sending while reading earlier messages preserves that exact reading position instead. Scrolling upward manually stops automatic following immediately; return to the bottom threshold or choose **Latest** to resume it.
+
 ### Chat Find
 
 In an active visible Chat list, <kbd>Ctrl+F</kbd> or <kbd>Cmd+F</kbd> focuses the existing conversation search without changing its query. In a selected Direct conversation, Room, or native/hybrid CLI transcript, the same chord opens **Find in conversation**. Type a literal case-insensitive query, use Enter (Shift+Enter for previous) or the previous/next controls to move through matching message rows, and use Escape or Close search to dismiss it. Only the activated full, floating, or docked Chat host owns the chord; raw/generic CLI terminals and nested dialogs keep their own browser or terminal behavior.

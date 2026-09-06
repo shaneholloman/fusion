@@ -150,6 +150,7 @@ export interface ChatViewProps {
 
 const CHAT_CONTEXT_MENU_FALLBACK_WIDTH_PX = 200;
 const CHAT_CONTEXT_MENU_VIEWPORT_MARGIN_PX = 8;
+const CHAT_BOTTOM_FOLLOW_THRESHOLD_PX = 50;
 
 /** Returns an issue or pull-request URL as a standalone composer line. */
 export function buildIssueChatPrefill(url: string): string {
@@ -970,10 +971,18 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     });
   }, [updateTopClippedMessages]);
 
-  const captureScrollSnapshot = useCallback(() => {
+  const captureScrollSnapshot = useCallback((synchronizeOwnershipFromGeometry = false) => {
     const messagesContainer = messagesContainerRef.current;
     const threadId = getActiveThreadId();
     if (!messagesContainer || !threadId) return;
+
+    let isDetached = isUserScrollingRef.current;
+    if (synchronizeOwnershipFromGeometry) {
+      const atBottom = messagesContainer.scrollTop + messagesContainer.clientHeight >= messagesContainer.scrollHeight - CHAT_BOTTOM_FOLLOW_THRESHOLD_PX;
+      isDetached = !atBottom;
+      isUserScrollingRef.current = isDetached;
+      setIsUserScrolling(isDetached);
+    }
 
     const scrollTop = messagesContainer.scrollTop;
     const messageElements = messagesContainer.querySelectorAll<HTMLElement>(".chat-message[data-message-id]");
@@ -990,7 +999,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
       clientHeight: messagesContainer.clientHeight,
       anchorMessageId,
       anchorOffset,
-      wasPinnedBefore: !isUserScrollingRef.current,
+      wasPinnedBefore: !isDetached,
       capturedAtMs: typeof performance !== "undefined" ? performance.now() : Date.now(),
     };
   }, [getActiveThreadId]);
@@ -999,11 +1008,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     const messagesContainer = messagesContainerRef.current;
     if (!messagesContainer) return;
 
-    const threshold = 50;
-    const atBottom = messagesContainer.scrollTop + messagesContainer.clientHeight >= messagesContainer.scrollHeight - threshold;
-    setIsUserScrolling(!atBottom);
-    isUserScrollingRef.current = !atBottom;
-    captureScrollSnapshot();
+    captureScrollSnapshot(true);
     scheduleTopClippedMessageUpdate();
   }, [captureScrollSnapshot, scheduleTopClippedMessageUpdate]);
 
@@ -1020,7 +1025,8 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
 
     const writeBottom = () => {
       if (!container.isConnected) return;
-      if (!options?.force && isUserScrollingRef.current) {
+      // A forced thread-opening write may run once, but every settle frame must yield to a later manual scroll.
+      if (isUserScrollingRef.current && (!options?.force || frame > 0)) {
         return;
       }
 
@@ -1071,19 +1077,21 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     };
   }, [activeThreadMessages, scheduleTopClippedMessageUpdate]);
 
-  useLayoutEffect(() => {
+  /*
+  FNXC:ChatScrollAnchor 2026-09-06-07:42:
+  L’envoi capture la propriété du viewport avant l’ajout optimiste : un lecteur au seuil bas suit chaque croissance de la réponse, tandis qu’un lecteur détaché conserve son message-ancre, y compris à scrollTop === 0. Tout défilement manuel met à jour la propriété synchroniquement et neutralise les frames et observateurs déjà programmés ; seul un retour volontaire au seuil bas ou « Latest » réactive le suivi.
+
+  FNXC:ChatScrollAnchor 2026-09-06-07:56:
+  Les changements de réflexion, de texte et d’outils sont chacun des croissances autonomes du fil. Chacun doit donc relancer le suivi conditionnel du bas, même lorsqu’aucune autre forme de delta n’accompagne une mise à jour d’outil.
+  */
+  const restoreDetachedScrollSnapshot = useCallback(() => {
     const messagesContainer = messagesContainerRef.current;
     const threadId = getActiveThreadId();
     const snapshot = scrollRestoreSnapshotRef.current;
     if (!messagesContainer || !threadId || !snapshot || snapshot.threadId !== threadId || snapshot.wasPinnedBefore) {
       return;
     }
-
-    const snapshotAgeMs = (typeof performance !== "undefined" ? performance.now() : Date.now()) - snapshot.capturedAtMs;
-    const hasScrollableOverflow = messagesContainer.scrollHeight > messagesContainer.clientHeight;
-    const isStaleSnapshot = snapshotAgeMs > 3000;
-    const isLikelyInvalidTopSample = snapshot.scrollTop <= 0 && snapshot.anchorOffset <= 0 && hasScrollableOverflow;
-    if (!isUserScrollingRef.current || isStaleSnapshot || isLikelyInvalidTopSample) {
+    if (!isUserScrollingRef.current) {
       scrollRestoreSnapshotRef.current = null;
       return;
     }
@@ -1093,18 +1101,24 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
       const anchorElement = getMessageElement(messagesContainer, snapshot.anchorMessageId);
       if (anchorElement) {
         restoredScrollTop = anchorElement.offsetTop - snapshot.anchorOffset;
-      } else {
-        restoredScrollTop = snapshot.scrollTop + (messagesContainer.scrollHeight - snapshot.scrollHeight);
       }
-    } else {
-      restoredScrollTop = snapshot.scrollTop + (messagesContainer.scrollHeight - snapshot.scrollHeight);
     }
 
     messagesContainer.scrollTop = Math.max(0, restoredScrollTop);
+    scrollRestoreSnapshotRef.current = {
+      ...snapshot,
+      scrollTop: messagesContainer.scrollTop,
+      scrollHeight: messagesContainer.scrollHeight,
+      clientHeight: messagesContainer.clientHeight,
+      capturedAtMs: typeof performance !== "undefined" ? performance.now() : Date.now(),
+    };
     isUserScrollingRef.current = true;
     setIsUserScrolling(true);
-    scrollRestoreSnapshotRef.current = null;
-  }, [activeThreadMessages, getActiveThreadId, getMessageElement]);
+  }, [getActiveThreadId, getMessageElement]);
+
+  useLayoutEffect(() => {
+    restoreDetachedScrollSnapshot();
+  }, [activeThreadMessages, restoreDetachedScrollSnapshot]);
 
   const logScrollDebug = useCallback((cause: string) => {
     if (typeof window === "undefined") {
@@ -1114,9 +1128,8 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
       return;
     }
     const container = messagesContainerRef.current;
-    const threshold = 50;
     const atBottom = container
-      ? container.scrollTop + container.clientHeight >= container.scrollHeight - threshold
+      ? container.scrollTop + container.clientHeight >= container.scrollHeight - CHAT_BOTTOM_FOLLOW_THRESHOLD_PX
       : true;
     console.debug("[chat-scroll]", {
       cause,
@@ -1218,7 +1231,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
       return;
     }
     scrollToBottom("streaming");
-  }, [isStreaming, streamingText, streamingThinking, scrollToBottom]);
+  }, [isStreaming, streamingText, streamingThinking, streamingToolCalls, scrollToBottom]);
 
   // Snap to latest on new messages only when the user was pinned before growth.
   useEffect(() => {
@@ -1463,6 +1476,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
 
     const observer = new ResizeObserver(() => {
       if (isUserScrollingRef.current) {
+        restoreDetachedScrollSnapshot();
         return;
       }
       anchorToBottom(messagesContainer);
@@ -1473,7 +1487,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     return () => {
       observer.disconnect();
     };
-  }, [anchorToBottom, activeSession?.id]);
+  }, [anchorToBottom, activeSession?.id, restoreDetachedScrollSnapshot]);
 
   // Fetch agents on mount for name resolution (project-scoped with stale-request protection)
   useEffect(() => {
@@ -1837,6 +1851,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     }
 
     const sentFiles = new Set(files);
+    captureScrollSnapshot(true);
     snippetDraftEphemeralRef.current = false;
     setMessageInput("");
     try {
@@ -1869,6 +1884,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     selectedChatCommands,
     chatSnippets,
     insertSnippetDraft,
+    captureScrollSnapshot,
     t,
   ]);
 
