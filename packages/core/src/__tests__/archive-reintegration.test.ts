@@ -2,19 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "../types.js";
 
 const mocks = vi.hoisted(() => ({
-  listArchivedTaskEntriesPage: vi.fn(),
+  listArchivedTaskEntriesPageTolerant: vi.fn(),
   restoreTaskFromArchive: vi.fn(),
   resolveWorkflowIrForTask: vi.fn(),
   resolveCompleteColumn: vi.fn(),
   readTaskRow: vi.fn(),
 }));
 
-vi.mock("../async-stores/async-archive-db.js", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../async-stores/async-archive-db.js")>(),
-  listArchivedTaskEntriesPage: mocks.listArchivedTaskEntriesPage,
-}));
 vi.mock("../task-store/async/async-archive-lineage.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../task-store/async/async-archive-lineage.js")>(),
+  listArchivedTaskEntriesPageTolerant: mocks.listArchivedTaskEntriesPageTolerant,
   restoreTaskFromArchive: mocks.restoreTaskFromArchive,
 }));
 vi.mock("../workflows/workflow-ir-resolver.js", async (importOriginal) => ({
@@ -30,7 +27,7 @@ vi.mock("../task-store/async/async-persistence.js", async (importOriginal) => ({
   readTaskRow: mocks.readTaskRow,
 }));
 
-import { reconcileArchivedTasksIntoDonePass } from "../task-store/archive-reintegration.js";
+import { drainArchivedTasksIntoDone, reconcileArchivedTasksIntoDonePass } from "../task-store/archive-reintegration.js";
 
 function archiveEntry(id: string) {
   return {
@@ -95,7 +92,7 @@ describe("reconcileArchivedTasksIntoDonePass", () => {
     vi.clearAllMocks();
     mocks.resolveWorkflowIrForTask.mockResolvedValue({ version: "v2", columns: [] });
     mocks.resolveCompleteColumn.mockReturnValue("done");
-    mocks.listArchivedTaskEntriesPage.mockResolvedValue([]);
+    mocks.listArchivedTaskEntriesPageTolerant.mockResolvedValue([]);
     mocks.readTaskRow.mockImplementation(async (layer, id) => layer.db.rows.get(id));
   });
 
@@ -135,7 +132,7 @@ describe("reconcileArchivedTasksIntoDonePass", () => {
   it("recreates a cold-only snapshot directly in Done", async () => {
     const entry = archiveEntry("FN-29502");
     const { store, rows } = makeStore();
-    mocks.listArchivedTaskEntriesPage.mockResolvedValue([entry]);
+    mocks.listArchivedTaskEntriesPageTolerant.mockResolvedValue([{ id: entry.id, entry, malformed: false }]);
     mocks.restoreTaskFromArchive.mockImplementation(async (_layer, _entry, options) => {
       rows.set(entry.id, options.taskRecord as Task);
       return { outcome: "restored", moved: true };
@@ -155,11 +152,32 @@ describe("reconcileArchivedTasksIntoDonePass", () => {
     expect(rows.get(entry.id)).toMatchObject({ column: "done" });
   });
 
+  it("retains a malformed snapshot while restoring valid rows that follow it", async () => {
+    const valid = archiveEntry("FN-29512");
+    const { store, rows } = makeStore();
+    mocks.listArchivedTaskEntriesPageTolerant.mockResolvedValue([
+      { id: "FN-29513", malformed: true },
+      { id: valid.id, entry: valid, malformed: false },
+    ]);
+    mocks.restoreTaskFromArchive.mockImplementation(async (_layer, _entry, options) => {
+      rows.set(valid.id, options.taskRecord as Task);
+      return { outcome: "restored", moved: true };
+    });
+
+    const result = await reconcileArchivedTasksIntoDonePass(store as never, { limit: 4 });
+
+    expect(result.outcomes).toEqual([
+      { taskId: "FN-29513", source: "cold-storage", outcome: "retained", reason: "malformed-snapshot" },
+      { taskId: valid.id, source: "cold-storage", outcome: "restored" },
+    ]);
+    expect(rows.get(valid.id)).toMatchObject({ column: "done" });
+  });
+
   it("lets the live row win a cold-snapshot collision without creating a duplicate", async () => {
     const entry = archiveEntry("FN-29503");
     const live = task(entry.id, { title: "Authoritative live row" });
     const { store, rows } = makeStore([live]);
-    mocks.listArchivedTaskEntriesPage.mockResolvedValue([entry]);
+    mocks.listArchivedTaskEntriesPageTolerant.mockResolvedValue([{ id: entry.id, entry, malformed: false }]);
     mocks.restoreTaskFromArchive.mockResolvedValue({ outcome: "live-won", moved: false });
 
     const result = await reconcileArchivedTasksIntoDonePass(store as never);
@@ -193,7 +211,9 @@ describe("reconcileArchivedTasksIntoDonePass", () => {
     const trailingLive = task("FN-29507");
     const cold = archiveEntry("FN-29508");
     const { store, rows } = makeStore([pausedA, pausedB, trailingLive]);
-    mocks.listArchivedTaskEntriesPage.mockResolvedValueOnce([cold]).mockResolvedValue([]);
+    mocks.listArchivedTaskEntriesPageTolerant
+      .mockResolvedValueOnce([{ id: cold.id, entry: cold, malformed: false }])
+      .mockResolvedValue([]);
     mocks.restoreTaskFromArchive.mockImplementation(async (_layer, _entry, options) => {
       rows.set(cold.id, options.taskRecord as Task);
       return { outcome: "restored", moved: true };
@@ -206,10 +226,21 @@ describe("reconcileArchivedTasksIntoDonePass", () => {
     expect(secondPass).toMatchObject({ movedCount: 1, restoredCount: 0, hasMore: true });
     expect(store.listTasks).toHaveBeenNthCalledWith(1, expect.objectContaining({ limit: 2, offset: 0 }));
     expect(store.listTasks).toHaveBeenNthCalledWith(2, expect.objectContaining({ limit: 2, offset: 2 }));
-    expect(mocks.listArchivedTaskEntriesPage).toHaveBeenNthCalledWith(1, store.asyncLayer.db, 2, 0, "project-1");
+    expect(mocks.listArchivedTaskEntriesPageTolerant).toHaveBeenNthCalledWith(1, store.asyncLayer.db, 2, 0, "project-1");
     expect(rows.get(pausedA.id)).toMatchObject({ column: "archived", userPaused: true });
     expect(rows.get(pausedB.id)).toMatchObject({ column: "archived", userPaused: true });
     expect(rows.get(trailingLive.id)).toMatchObject({ column: "done" });
+  });
+
+  it("drains more than one historical page in one cooperative cycle", async () => {
+    const archived = Array.from({ length: 205 }, (_, index) => task(`FN-${30000 + index}`));
+    const { store, rows } = makeStore(archived);
+
+    const result = await drainArchivedTasksIntoDone(store as never, { limit: 200 });
+
+    expect(result).toMatchObject({ movedCount: 205, restoredCount: 0, hasMore: false });
+    expect(new Set(result.outcomes.map((item) => item.taskId)).size).toBe(205);
+    expect([...rows.values()].filter((value) => value.column === "done")).toHaveLength(205);
   });
 
   it("yields a repeatedly failing row after the shared starvation budget", async () => {
@@ -235,8 +266,8 @@ describe("reconcileArchivedTasksIntoDonePass", () => {
     ]);
     expect(yieldedPass.outcomes).toEqual([]);
     expect(retryPass.outcomes).toEqual([
-      { taskId: failing.id, source: "live-column", outcome: "failed" },
+      { taskId: failing.id, source: "live-column", outcome: "retained", reason: "failure-budget" },
     ]);
-    expect(store.moveTaskIf).toHaveBeenCalledTimes(2);
+    expect(store.moveTaskIf).toHaveBeenCalledTimes(1);
   });
 });

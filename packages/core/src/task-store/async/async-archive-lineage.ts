@@ -16,9 +16,11 @@ import * as schema from "../../postgres/schema/index.js";
 import { projectScopeFor, type AsyncDataLayer, type DbTransaction } from "../../postgres/data-layer.js";
 import { ACTIVE_TASK_FILTER } from "./async-persistence.js";
 import { projectPartition } from "./async-lifecycle.js";
-import { insertTaskRowInTransaction, readTaskRowInTransaction } from "./async-persistence.js";
+import { buildTaskInsertValues, insertTaskRowInTransaction, readTaskRowInTransaction } from "./async-persistence.js";
 import { acquireTaskAdvisoryXactLock } from "../task-advisory-lock.js";
-import type { ArchivedTaskEntry } from "../../types.js";
+import type { ArchivedTaskEntry, Task } from "../../types.js";
+import { ARCHIVE_RESTORABLE_PERSISTENCE_COLUMNS } from "../archive-restoration-contract.js";
+import { archiveEntryToTask } from "../serialization.js";
 
 /**
  * FNXC:TaskStoreArchiveLineage 2026-06-24-07:10:
@@ -110,6 +112,48 @@ export async function findArchivedTaskEntry(
  * List all archived-task snapshots, newest-first by archivedAt. This is the
  * async equivalent of `archiveDb.list()`.
  */
+export interface TolerantArchivedTaskEntryRow {
+  id: string;
+  entry?: ArchivedTaskEntry;
+  malformed: boolean;
+}
+
+/*
+FNXC:TaskArchiveReintegration 2026-09-06-08:39:
+Historical JSON corruption is isolated per archive row. The cursor still receives one carrier for
+that row, so it can report and step past unreadable proof without deleting it or starving later tasks.
+*/
+export async function listArchivedTaskEntriesPageTolerant(
+  db: AsyncDataLayer["db"] | DbTransaction,
+  limit: number,
+  offset: number,
+  projectId?: string,
+): Promise<TolerantArchivedTaskEntryRow[]> {
+  if (limit <= 0) return [];
+  const numericTaskSuffix = sql`COALESCE(substring(${schema.archive.archivedTasks.id} from '-([0-9]+)$')::numeric, 0)`;
+  const rows = await db
+    .select({
+      id: schema.archive.archivedTasks.id,
+      taskJson: schema.archive.archivedTasks.taskJson,
+    })
+    .from(schema.archive.archivedTasks)
+    .where(eq(schema.archive.archivedTasks.projectId, projectPartition(projectId)))
+    .orderBy(
+      desc(schema.archive.archivedTasks.archivedAt),
+      desc(numericTaskSuffix),
+      desc(schema.archive.archivedTasks.id),
+    )
+    .limit(limit)
+    .offset(offset);
+  return rows.map((row) => {
+    try {
+      return { id: row.id, entry: JSON.parse(row.taskJson) as ArchivedTaskEntry, malformed: false };
+    } catch {
+      return { id: row.id, malformed: true };
+    }
+  });
+}
+
 export async function listArchivedTaskEntries(
   db: AsyncDataLayer["db"] | DbTransaction,
   projectId?: string,
@@ -237,6 +281,70 @@ async function reconcileRestoredWorktreeState(
 
 export type RestoreArchivedTaskOutcome = "restored" | "live-won" | "user-paused";
 
+function collectMissingHistoricalValues(
+  existing: Record<string, unknown> | undefined,
+  evidence: Record<string, unknown>,
+  projectId: string | undefined,
+  lineageId: string,
+): { values: Record<string, unknown>; fields: string[] } {
+  const evidenceValues = buildTaskInsertValues(evidence, { lineageId }, projectId);
+  const values: Record<string, unknown> = {};
+  const fields: string[] = [];
+  for (const [field, columns] of Object.entries(ARCHIVE_RESTORABLE_PERSISTENCE_COLUMNS)) {
+    if (evidence[field] === undefined) continue;
+    let recovered = false;
+    for (const column of columns) {
+      const liveValue = existing?.[column];
+      const evidenceValue = evidenceValues[column];
+      if ((liveValue === null || liveValue === undefined) && evidenceValue !== null && evidenceValue !== undefined) {
+        values[column] = evidenceValue;
+        recovered = true;
+      }
+    }
+    if (recovered) fields.push(field);
+  }
+  return { values, fields };
+}
+
+export interface SupplementTaskHistoryResult {
+  outcome: "supplemented" | "no-op" | "missing" | "user-paused";
+  fields: string[];
+}
+
+/*
+FNXC:TaskArchiveReintegration 2026-09-06-08:39:
+Operational repair accepts only exact structured evidence and fills NULL historical columns under the
+same project/task advisory lock as archive restoration. Existing values, deleted rows, runtime fields,
+and user-paused tasks remain untouched; dry-run executes the same classification without writing.
+*/
+export async function supplementTaskHistoryFromEvidence(
+  layer: AsyncDataLayer,
+  taskId: string,
+  evidence: Partial<Task>,
+  options: { dryRun?: boolean } = {},
+): Promise<SupplementTaskHistoryResult> {
+  return await layer.transactionImmediate(async (tx) => {
+    await acquireTaskAdvisoryXactLock(tx, layer.projectId, taskId);
+    const existing = await readTaskRowInTransaction(tx, taskId, { includeDeleted: true }, layer.projectId);
+    if (!existing || existing.deletedAt) return { outcome: "missing", fields: [] };
+    if (existing.userPaused) return { outcome: "user-paused", fields: [] };
+    const supplement = collectMissingHistoricalValues(
+      existing as unknown as Record<string, unknown>,
+      evidence as Record<string, unknown>,
+      layer.projectId,
+      existing.lineageId as string,
+    );
+    if (supplement.fields.length === 0) return { outcome: "no-op", fields: [] };
+    if (!options.dryRun) {
+      await tx.update(schema.project.tasks).set(supplement.values).where(and(
+        eq(schema.project.tasks.projectId, projectPartition(layer.projectId)),
+        eq(schema.project.tasks.id, taskId),
+      ));
+    }
+    return { outcome: "supplemented", fields: supplement.fields };
+  });
+}
+
 /**
  * Atomically make one historical cold snapshot subordinate to the live task table.
  *
@@ -260,21 +368,36 @@ export async function restoreTaskFromArchive(
       return { outcome: "user-paused", moved: false };
     }
 
+    const taskRecord = options.taskRecord ?? archiveEntryToTask(entry);
+    const missingHistoricalValues = collectMissingHistoricalValues(
+      existing as unknown as Record<string, unknown> | undefined,
+      taskRecord as Record<string, unknown>,
+      layer.projectId,
+      entry.lineageId,
+    ).values;
+
     if (existing && !existing.deletedAt) {
       const moved = existing.column === "archived" && options.targetColumn !== undefined;
-      if (moved) {
-        await tx
-          .update(schema.project.tasks)
-          .set({
+      /*
+      FNXC:TaskArchiveReintegration 2026-09-06-08:39:
+      A live row remains authoritative during a cold-snapshot collision, but NULL historical columns
+      are not authoritative evidence. Fill only those gaps from the exact snapshot under the same
+      project/task lock, then delete the cold proof after the update succeeds.
+      */
+      await tx
+        .update(schema.project.tasks)
+        .set({
+          ...missingHistoricalValues,
+          ...(moved ? {
             column: options.targetColumn,
             columnMovedAt: now,
-            updatedAt: now,
-          })
-          .where(and(
-            eq(schema.project.tasks.projectId, projectPartition(layer.projectId)),
-            eq(schema.project.tasks.id, entry.id),
-          ));
-      }
+          } : {}),
+          updatedAt: now,
+        })
+        .where(and(
+          eq(schema.project.tasks.projectId, projectPartition(layer.projectId)),
+          eq(schema.project.tasks.id, entry.id),
+        ));
       await deleteArchivedTaskEntry(tx, entry.id, layer.projectId);
       return { outcome: "live-won", moved };
     }
@@ -287,6 +410,7 @@ export async function restoreTaskFromArchive(
       await tx
         .update(schema.project.tasks)
         .set({
+          ...missingHistoricalValues,
           deletedAt: null,
           workspaceWorktrees: reconciledWorktreeState.workspaceWorktrees,
           worktree: reconciledWorktreeState.worktree,
@@ -304,15 +428,12 @@ export async function restoreTaskFromArchive(
           eq(schema.project.tasks.id, entry.id),
         ));
     } else {
-      if (!options.taskRecord) {
-        throw new Error(`Archived task ${entry.id} has no project row or restoration record`);
-      }
       await insertTaskRowInTransaction(
         tx,
         {
-          ...options.taskRecord,
+          ...taskRecord,
           column: options.targetColumn ?? "archived",
-          columnMovedAt: options.targetColumn ? now : options.taskRecord.columnMovedAt,
+          columnMovedAt: options.targetColumn ? now : taskRecord.columnMovedAt,
           updatedAt: now,
           deletedAt: undefined,
         },

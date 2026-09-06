@@ -1,8 +1,10 @@
 import type { TaskStore } from "../store.js";
 import { createLogger } from "../process/logger.js";
 import type { Column } from "../types.js";
-import { listArchivedTaskEntriesPage } from "../async-stores/async-archive-db.js";
-import { restoreTaskFromArchive } from "./async/async-archive-lineage.js";
+import {
+  listArchivedTaskEntriesPageTolerant,
+  restoreTaskFromArchive,
+} from "./async/async-archive-lineage.js";
 import { resolveWorkflowIrForTask } from "../workflows/workflow-ir-resolver.js";
 import { resolveCompleteColumn } from "../workflows/workflow-lifecycle-traits.js";
 import { readTaskRow } from "./async/async-persistence.js";
@@ -40,8 +42,12 @@ async function readCursorPage<T>(
 ): Promise<{ items: T[]; offset: number }> {
   if (limit <= 0) return { items: [], offset };
   const items = await readPage(offset, limit);
-  if (items.length > 0 || offset === 0) return { items, offset };
-  return { items: await readPage(0, limit), offset: 0 };
+  /*
+  FNXC:TaskArchiveReintegration 2026-09-06-08:00:
+  Reaching the end of a survivor cursor closes this drain cycle instead of immediately wrapping and
+  retrying paused or permanently failing rows forever. A later maintenance cycle starts at zero.
+  */
+  return items.length === 0 && offset > 0 ? { items: [], offset: 0 } : { items, offset };
 }
 
 function shouldAttemptReintegration(
@@ -58,12 +64,14 @@ function shouldAttemptReintegration(
 }
 
 export type ArchivedTaskReintegrationSource = "live-column" | "cold-storage";
-export type ArchivedTaskReintegrationOutcome = "moved" | "restored" | "live-won" | "failed";
+export type ArchivedTaskReintegrationOutcome = "moved" | "restored" | "live-won" | "failed" | "retained";
+export type ArchivedTaskReintegrationRetainedReason = "user-paused" | "failure-budget" | "malformed-snapshot";
 
 export interface ArchivedTaskReintegrationItem {
   taskId: string;
   source: ArchivedTaskReintegrationSource;
   outcome: ArchivedTaskReintegrationOutcome;
+  reason?: ArchivedTaskReintegrationRetainedReason;
 }
 
 export interface ArchivedTaskReintegrationResult {
@@ -71,6 +79,46 @@ export interface ArchivedTaskReintegrationResult {
   restoredCount: number;
   outcomes: ArchivedTaskReintegrationItem[];
   hasMore: boolean;
+}
+
+export interface ArchivedTaskHistoryInspection {
+  liveSentinels: import("../types.js").Task[];
+  coldEntries: import("../types.js").ArchivedTaskEntry[];
+  malformedColdEntryIds: string[];
+}
+
+/** Read every historical carrier without mutating either source. */
+export async function inspectArchivedTaskHistory(store: TaskStore): Promise<ArchivedTaskHistoryInspection> {
+  const layer = store.asyncLayer;
+  if (!layer?.projectId?.trim()) throw new Error("Archive history inspection requires an exact project identity");
+  const liveSentinels: import("../types.js").Task[] = [];
+  const coldEntries: import("../types.js").ArchivedTaskEntry[] = [];
+  const malformedColdEntryIds: string[] = [];
+  for (let offset = 0; ; offset += ARCHIVE_REINTEGRATION_PAGE_SIZE) {
+    const page = await store.listTasks({
+      column: "archived",
+      includeArchived: false,
+      includeDeleted: false,
+      limit: ARCHIVE_REINTEGRATION_PAGE_SIZE,
+      offset,
+      slim: false,
+      startupMemo: false,
+    });
+    liveSentinels.push(...page);
+    if (page.length < ARCHIVE_REINTEGRATION_PAGE_SIZE) break;
+  }
+  for (let offset = 0; ; offset += ARCHIVE_REINTEGRATION_PAGE_SIZE) {
+    const page = await listArchivedTaskEntriesPageTolerant(
+      layer.db,
+      ARCHIVE_REINTEGRATION_PAGE_SIZE,
+      offset,
+      layer.projectId,
+    );
+    coldEntries.push(...page.flatMap((row) => row.entry ? [row.entry] : []));
+    malformedColdEntryIds.push(...page.filter((row) => row.malformed).map((row) => row.id));
+    if (page.length < ARCHIVE_REINTEGRATION_PAGE_SIZE) break;
+  }
+  return { liveSentinels, coldEntries, malformedColdEntryIds };
 }
 
 async function resolveDoneColumn(store: TaskStore, taskId: string): Promise<Column> {
@@ -138,6 +186,12 @@ export async function reconcileArchivedTasksIntoDonePass(
     const failureKey = `live:${task.id}`;
     if (task.userPaused || !shouldAttemptReintegration(cursor, failureKey, maxFailureAttempts)) {
       liveSurvivors += 1;
+      outcomes.push({
+        taskId: task.id,
+        source: "live-column",
+        outcome: "retained",
+        reason: task.userPaused ? "user-paused" : "failure-budget",
+      });
       continue;
     }
     let leftArchivedColumn = false;
@@ -171,12 +225,24 @@ export async function reconcileArchivedTasksIntoDonePass(
   cursor.liveOffset = livePage.offset + liveSurvivors;
 
   const coldPage = await readCursorPage(cursor.coldOffset, coldLimit, async (offset, pageLimit) =>
-    await listArchivedTaskEntriesPage(layer.db, pageLimit, offset, layer.projectId));
+    await listArchivedTaskEntriesPageTolerant(layer.db, pageLimit, offset, layer.projectId));
   let coldSurvivors = 0;
-  for (const entry of coldPage.items) {
+  for (const archivedRow of coldPage.items) {
+    if (archivedRow.malformed || !archivedRow.entry) {
+      coldSurvivors += 1;
+      outcomes.push({
+        taskId: archivedRow.id,
+        source: "cold-storage",
+        outcome: "retained",
+        reason: "malformed-snapshot",
+      });
+      continue;
+    }
+    const entry = archivedRow.entry;
     const failureKey = `cold:${entry.id}`;
     if (!shouldAttemptReintegration(cursor, failureKey, maxFailureAttempts)) {
       coldSurvivors += 1;
+      outcomes.push({ taskId: entry.id, source: "cold-storage", outcome: "retained", reason: "failure-budget" });
       continue;
     }
     let drainedColdSnapshot = false;
@@ -189,6 +255,7 @@ export async function reconcileArchivedTasksIntoDonePass(
       const existingRow = await readTaskRow(layer, entry.id, { includeDeleted: true });
       if (existingRow?.userPaused === true) {
         coldSurvivors += 1;
+        outcomes.push({ taskId: entry.id, source: "cold-storage", outcome: "retained", reason: "user-paused" });
         continue;
       }
       const doneColumn = await resolveDoneColumn(store, entry.id);
@@ -203,11 +270,13 @@ export async function reconcileArchivedTasksIntoDonePass(
       });
       if (restoration.outcome === "user-paused") {
         coldSurvivors += 1;
+        outcomes.push({ taskId: entry.id, source: "cold-storage", outcome: "retained", reason: "user-paused" });
         continue;
       }
       drainedColdSnapshot = true;
       if (restoration.outcome === "restored") {
-        await store.restoreFromArchive(entry, { targetColumn: doneColumn, now });
+        const authoritativeTask = await store.getTask(entry.id);
+        await store.restoreFromArchive(entry, { targetColumn: doneColumn, now, authoritativeTask });
       }
       await mirrorReintegratedTask(store, entry.id);
       cursor.failureAttempts.delete(failureKey);
@@ -240,11 +309,30 @@ export async function reconcileArchivedTasksIntoDonePass(
   };
 }
 
-/**
- * Store-open compatibility pass for hosts that do not run the engine. The engine owns repeated
- * startup/maintenance reconciliation; opening a store performs only one bounded page.
- */
+/** Drain every currently reachable page while yielding between bounded transactions. */
+export async function drainArchivedTasksIntoDone(
+  store: TaskStore,
+  options: { limit?: number; maxFailureAttempts?: number } = {},
+): Promise<ArchivedTaskReintegrationResult> {
+  const aggregate: ArchivedTaskReintegrationResult = {
+    movedCount: 0,
+    restoredCount: 0,
+    outcomes: [],
+    hasMore: false,
+  };
+  do {
+    const page = await reconcileArchivedTasksIntoDonePass(store, options);
+    aggregate.movedCount += page.movedCount;
+    aggregate.restoredCount += page.restoredCount;
+    aggregate.outcomes.push(...page.outcomes);
+    aggregate.hasMore = page.hasMore;
+    if (page.hasMore) await new Promise<void>((resolve) => setImmediate(resolve));
+  } while (aggregate.hasMore);
+  return aggregate;
+}
+
+/** Store-open compatibility drain for hosts that do not run the engine. */
 export async function reintegrateArchivedTasksIntoDoneOnOpen(store: TaskStore): Promise<number> {
-  const result = await reconcileArchivedTasksIntoDonePass(store);
+  const result = await drainArchivedTasksIntoDone(store);
   return result.movedCount + result.restoredCount;
 }

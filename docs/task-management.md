@@ -4,6 +4,14 @@
 
 This guide covers task creation, lifecycle behavior, task metadata, and operational workflows.
 
+## Legacy completed-history reintegration
+
+Fusion drains legacy `archived` carrier rows and cold archive snapshots into each task workflow's `complete` column during store open and self-healing maintenance. Work is processed in bounded pages with an event-loop yield between pages, but one cycle continues until every currently reachable page has been inspected; a history larger than 200 tasks is therefore not truncated.
+
+A live task row remains authoritative. Cold evidence may recreate an absent row or fill only missing fields on a soft-deleted row, but it never overwrites a present live value. User-paused tasks and failed candidates remain in their durable carrier with a fixed retained/failure reason so later maintenance can retry without blocking subsequent pages.
+
+For an operator audit or repair, build core and run `node scripts/reconcile-archived-task-history.mjs --project-root <exact-project-root>`. The default is a non-mutating task-history dry-run. Add `--apply` only after reviewing its deterministic JSON report. The tool requires an exact project identity, uses TaskStore's project-scoped transactional primitives, reports Done totals before/after, and lists historical fields for which no durable proof remains.
+
 ## Task Creation Options
 
 ### 1) Quick Entry (dashboard)

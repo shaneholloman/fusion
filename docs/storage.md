@@ -44,6 +44,14 @@ See the [2026-07-14 PostgreSQL runtime cutover review](./postgres-migration-revi
 - Startup and Batch 1 self-healing expire locks when their lease elapsed or the owner task is terminal/missing. They never move a task or alter scheduler, worktree, semaphore, or verification state. Run-audit events are `symbol-lock:acquired`, `symbol-lock:acquire-conflict`, `symbol-lock:renewed`, `symbol-lock:released`, `symbol-lock:reconcile-stale`, and deduplicated `symbol-lock:reconcile-stale-no-action`; metadata uses only counts/outcomes and normalized opaque keys.
 - FN-8405 adds `Task.declaredSymbols` as the durable, normalized task declaration source. `## Declared Symbols` in PROMPT.md is parsed only on create/update writes: an absent key may hydrate from the prompt, while a present `undefined`, `null` (update), or `[]` clears and suppresses hydration; a non-empty explicit array wins. Store resolution (`resolveTaskSymbols` and `resolveTaskSymbolsForWorkItem({ taskId })`) reads only the durable field, and slim projections plus legacy archive snapshots retain it during reintegration. Scheduler admission remains a separate FN-8306 consumer; File Scope is never treated as a symbol source.
 
+## Legacy archive snapshot authority
+
+PostgreSQL `project.tasks` is the sole live authority. `archive.archived_tasks.task_json` is a temporary compatibility/recovery snapshot: reintegration reads it under the project/task advisory transaction, writes or revives the project-scoped live row, and deletes the cold snapshot only after the live write succeeds.
+
+The merge is non-destructive. Present live values—including `0`, `false`, and empty arrays—win; cold values fill only fields whose live representation is absent. Historical timing, token usage, review/merge evidence, and modified-file provenance are recoverable when present. Worktrees, workspace leases/checkouts, active sessions, status/blocker/pause state, and active runtime errors are never restored from cold history. If neither PostgreSQL, a retained authoritative task artifact, nor durable task-to-commit evidence proves a value, repair tooling reports it as unavailable instead of storing zero.
+
+The operational `scripts/reconcile-archived-task-history.mjs` command boots the canonical PostgreSQL backend for an exact project root. It is dry-run by default and delegates `--apply` to TaskStore reconciliation plus commit-association evidence backfill; it never reads a retained SQLite database as runtime authority.
+
 ## Soft-deleted tasks (FN-5105)
 
 ### History ledger (FN-227)

@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, afterEach, afterAll, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import * as schema from "../../postgres/schema/index.js";
+import { buildTaskInsertValues } from "../../task-store/async/async-persistence.js";
 import {
   pgDescribe,
   createSharedPgTaskStoreTestHarness,
@@ -48,6 +49,39 @@ pgDescribe("TaskStore completed-task pagination", () => {
     ]);
     expect([...pageOne.tasks, ...pageTwo.tasks].map((task) => task.id)).not.toContain(current.id);
     expect([...pageOne.tasks, ...pageTwo.tasks].map((task) => task.id)).not.toContain(deleted.id);
+  });
+
+  it("pages every completed row beyond the former 200-item boundary for both sorts", async () => {
+    const store = h.store();
+    const rows = Array.from({ length: 205 }, (_, index) => {
+      const id = `FN-${40000 + index}`;
+      const timestamp = new Date(Date.UTC(2026, 7, 1, 0, 0, index)).toISOString();
+      return buildTaskInsertValues({
+        id,
+        description: `historical delivery ${index}`,
+        column: "done",
+        dependencies: [],
+        steps: [],
+        currentStep: 0,
+        log: [],
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        columnMovedAt: timestamp,
+      }, { lineageId: `lineage-${id}` }, h.layer().projectId);
+    });
+    await h.layer().db.insert(schema.project.tasks).values(rows as never);
+
+    for (const sort of ["completion-date-desc", "task-id-desc"] as const) {
+      const seen: string[] = [];
+      for (let offset = 0; ; offset += 50) {
+        const page = await store.listCompletedTasks({ limit: 50, offset, sort });
+        seen.push(...page.tasks.map((task) => task.id));
+        expect(page.total).toBe(205);
+        if (!page.hasMore) break;
+      }
+      expect(seen).toHaveLength(205);
+      expect(new Set(seen).size).toBe(205);
+    }
   });
 
   it("orders every task-id page in SQL before applying offsets", async () => {

@@ -12,6 +12,7 @@ function makeStore(recordRunAuditEvent?: (event: unknown) => unknown) {
         outcomes: [
           { taskId: "FN-LIVE", source: "live-column", outcome: "moved" },
           { taskId: "FN-COLD", source: "cold-storage", outcome: "restored" },
+          { taskId: "FN-PAUSED", source: "live-column", outcome: "retained", reason: "user-paused" },
         ],
       })
       .mockResolvedValue({ movedCount: 0, restoredCount: 0, hasMore: false, outcomes: [] }),
@@ -35,7 +36,7 @@ describe("SelfHealingManager archived-to-Done reconciliation", () => {
       limit: 200,
       maxFailureAttempts: 3,
     });
-    expect(store.recordRunAuditEvent).toHaveBeenCalledTimes(2);
+    expect(store.recordRunAuditEvent).toHaveBeenCalledTimes(3);
     expect(store.recordRunAuditEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({
       mutationType: "task:reconcile-archived-into-done",
       taskId: "FN-LIVE",
@@ -58,6 +59,10 @@ describe("SelfHealingManager archived-to-Done reconciliation", () => {
         outcome: "restored",
       },
     }));
+    expect(store.recordRunAuditEvent).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      taskId: "FN-PAUSED",
+      metadata: expect.objectContaining({ outcome: "retained", reason: "user-paused" }),
+    }));
   });
 
   it.each([
@@ -77,7 +82,7 @@ describe("SelfHealingManager archived-to-Done reconciliation", () => {
     const manager = new SelfHealingManager(store as never, { rootDir: "/repo" });
 
     const reconciliation = manager.reconcileArchivedTasksIntoDone();
-    await vi.advanceTimersByTimeAsync(RUN_AUDIT_EMIT_TIMEOUT_MS * 2);
+    await vi.advanceTimersByTimeAsync(RUN_AUDIT_EMIT_TIMEOUT_MS * 4);
 
     await expect(reconciliation).resolves.toBe(2);
   });

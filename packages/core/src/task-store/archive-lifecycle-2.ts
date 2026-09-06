@@ -30,6 +30,7 @@ import {findLiveDependencyDependents, findLiveLineageChildren as findLiveLineage
 import { classifyLineageInvalidationOutcomeError, lineageEvidenceTargetVersionForTest, recordLineageInvalidationOutcome, reconcileClearedLineageChildren, resolveAndAssertLineageCandidatesUnchanged, runLineageInvalidation } from "../task-store/lineage-approval-invalidation.js";
 import { ARCHIVED_SENTINEL_LANES } from "../project-lane-vocabulary.js";
 import {writePromptFileAtomic} from "./prompt-file.js";
+import {pickArchiveRestorableTaskFields} from "./archive-restoration-contract.js";
 
 export async function taskToArchiveEntryImpl(store: TaskStore, task: Task, archivedAt: string): Promise<ArchivedTaskEntry> {
     /*
@@ -74,48 +75,22 @@ export async function taskToArchiveEntryImpl(store: TaskStore, task: Task, archi
       attachments: task.attachments,
       comments: task.comments,
       review: task.review,
-      reviewState: task.reviewState,
       prompt,
       ...agentLogFields,
-      log: [{ timestamp: archivedAt, action: "Task deleted" }],
+      /*
+      FNXC:TaskArchiveReintegration 2026-09-06-09:03:
+      A cold-only restore must retain the activity history that was durable at deletion time because
+      slim archive reads derive timedExecutionMs from its [timing] events. Append the deletion marker
+      instead of replacing those proofs; transient runtime ownership remains excluded separately.
+      */
+      log: [...(task.log ?? []), { timestamp: archivedAt, action: "Task deleted" }],
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
       columnMovedAt: task.columnMovedAt,
-      firstExecutionAt: task.firstExecutionAt,
-      cumulativeActiveMs: task.cumulativeActiveMs,
-      cumulativePlanningMs: task.cumulativePlanningMs,
-      planningStartedAt: task.planningStartedAt,
-      executionStartedAt: task.executionStartedAt,
-      executionCompletedAt: task.executionCompletedAt,
       archivedAt,
-      modelPresetId: task.modelPresetId,
-      modelProvider: task.modelProvider,
-      credentialInstanceId: task.credentialInstanceId,
-      modelId: task.modelId,
-      validatorModelProvider: task.validatorModelProvider,
-      validatorCredentialInstanceId: task.validatorCredentialInstanceId,
-      validatorModelId: task.validatorModelId,
-      planningModelProvider: task.planningModelProvider,
-      planningCredentialInstanceId: task.planningCredentialInstanceId,
-      planningModelId: task.planningModelId,
-      mergerModelProvider: task.mergerModelProvider,
-      mergerCredentialInstanceId: task.mergerCredentialInstanceId,
-      mergerModelId: task.mergerModelId,
-      mergerThinkingLevel: task.mergerThinkingLevel,
-      noCommitsExpected: task.noCommitsExpected,
-      baseBranch: task.baseBranch,
+      ...pickArchiveRestorableTaskFields(task),
+      // Branch is retained as forensic provenance in the snapshot but is not a restorable runtime owner.
       branch: task.branch,
-      branchContext: task.branchContext,
-      autoMerge: task.autoMerge,
-      baseCommitSha: task.baseCommitSha,
-      mergeRetries: task.mergeRetries,
-      error: task.error,
-      modifiedFiles: task.modifiedFiles,
-      declaredSymbols: task.declaredSymbols,
-      missionId: task.missionId,
-      sliceId: task.sliceId,
-      assigneeUserId: task.assigneeUserId,
-      mergeDetails: task.mergeDetails,
     };
   }
 
@@ -435,7 +410,7 @@ is supplied, every restored file already names that lane and cannot transiently 
 export async function restoreFromArchiveImpl(
   store: TaskStore,
   entry: import("../types.js").ArchivedTaskEntry,
-  options: { targetColumn?: string; now?: string } = {},
+  options: { targetColumn?: string; now?: string; authoritativeTask?: Task } = {},
 ): Promise<Task> {
     const dir = store.taskDir(entry.id);
 
@@ -443,7 +418,7 @@ export async function restoreFromArchiveImpl(
     await mkdir(dir, { recursive: true });
 
     // Build restored task (clear transient fields)
-    const restoredTask: Task = {
+    const archiveProjection: Task = {
       id: entry.id,
       lineageId: entry.lineageId || generateTaskLineageId(),
       title: entry.title,
@@ -469,31 +444,29 @@ export async function restoreFromArchiveImpl(
       createdAt: entry.createdAt,
       updatedAt: options.now ?? new Date().toISOString(),
       columnMovedAt: options.targetColumn ? (options.now ?? new Date().toISOString()) : entry.columnMovedAt,
-      modelPresetId: entry.modelPresetId,
-      modelProvider: entry.modelProvider,
-      credentialInstanceId: entry.credentialInstanceId,
-      modelId: entry.modelId,
-      validatorModelProvider: entry.validatorModelProvider,
-      validatorCredentialInstanceId: entry.validatorCredentialInstanceId,
-      validatorModelId: entry.validatorModelId,
-      planningModelProvider: entry.planningModelProvider,
-      planningCredentialInstanceId: entry.planningCredentialInstanceId,
-      planningModelId: entry.planningModelId,
-      mergerModelProvider: entry.mergerModelProvider,
-      mergerCredentialInstanceId: entry.mergerCredentialInstanceId,
-      mergerModelId: entry.mergerModelId,
-      mergerThinkingLevel: entry.mergerThinkingLevel,
-      noCommitsExpected: entry.noCommitsExpected,
-      modifiedFiles: entry.modifiedFiles,
-      declaredSymbols: entry.declaredSymbols,
+      ...pickArchiveRestorableTaskFields(entry),
       /*
       FNXC:ArchiveRestore 2026-08-15-05:39:
       Cold archive entries intentionally omit per-repository worktree and landing state. Reconstructing
       either `workspaceWorktrees` or `branch` would revive disposed paths and let the workspace
       partial-land reconciler mistake a reintegrated historical card for a recoverable landing.
       */
-      // Intentionally NOT restoring: worktree, workspaceWorktrees, branch, status, blockedBy, paused, executionStartBranch, baseCommitSha, error
+      // Intentionally NOT restoring: worktree, workspaceWorktrees, branch, status, blockedBy, paused, executionStartBranch, error
     };
+    /*
+    FNXC:TaskArchiveReintegration 2026-09-06-08:00:
+    PostgreSQL has already committed before compatibility artifacts are published. Re-project the
+    authoritative row here so a file watcher can never write archive values over richer live data.
+    */
+    const restoredTask: Task = options.authoritativeTask ? {
+      ...archiveProjection,
+      ...options.authoritativeTask,
+      column: options.targetColumn ?? options.authoritativeTask.column,
+      updatedAt: options.now ?? options.authoritativeTask.updatedAt,
+      columnMovedAt: options.targetColumn
+        ? (options.now ?? options.authoritativeTask.columnMovedAt)
+        : options.authoritativeTask.columnMovedAt,
+    } : archiveProjection;
 
     // Write task.json
     await store.atomicWriteTaskJson(dir, restoredTask);

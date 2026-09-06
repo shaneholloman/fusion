@@ -2048,7 +2048,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
     }
   }
 
-  /** Rehome one bounded page of historical task archive state into Done. */
+  /** Cooperatively drain historical task archive state into Done. */
   async reconcileArchivedTasksIntoDone(): Promise<number> {
     const result = await this.store.reconcileArchivedTasksIntoDone({
       limit: 200,
@@ -2069,6 +2069,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           movedCount: item.source === "live-column" && item.outcome === "moved" ? 1 : 0,
           restoredCount: item.source === "cold-storage" && item.outcome === "restored" ? 1 : 0,
           outcome: item.outcome,
+          ...(item.reason ? { reason: item.reason } : {}),
         },
       }, { log });
     }

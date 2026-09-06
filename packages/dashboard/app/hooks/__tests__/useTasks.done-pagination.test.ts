@@ -56,6 +56,30 @@ describe("useTasks Done pagination", () => {
     expect(result.current.completedHasMore).toBe(true);
   });
 
+  it("loads every page when completed history exceeds 202 rows", async () => {
+    const completed = Array.from({ length: 205 }, (_, index) => task(`FN-DONE-${205 - index}`, "done"));
+    for (let offset = 0; offset < completed.length; offset += 50) {
+      const page = completed.slice(offset, offset + 50);
+      fetchCompletedTasks.mockResolvedValueOnce({
+        tasks: page,
+        total: completed.length,
+        hasMore: offset + page.length < completed.length,
+      });
+    }
+
+    const { result } = renderHook(() => useTasks({ projectId: "project-a", sseEnabled: false }));
+    await waitFor(() => expect(result.current.completedTotal).toBe(205));
+    while (result.current.completedHasMore) {
+      await act(async () => result.current.loadMoreCompletedTasks());
+    }
+
+    const doneIds = result.current.tasks.filter((candidate) => candidate.column === "done").map((candidate) => candidate.id);
+    expect(doneIds).toHaveLength(205);
+    expect(new Set(doneIds).size).toBe(205);
+    expect(fetchCompletedTasks).toHaveBeenCalledTimes(5);
+    expect(fetchCompletedTasks).toHaveBeenLastCalledWith("project-a", 50, 200, "completion-date-desc");
+  });
+
   it("deduplicates later pages and advances from the number of unique loaded Done rows", async () => {
     const firstPage = [task("FN-DONE-3", "done"), task("FN-DONE-2", "done")];
     fetchCompletedTasks

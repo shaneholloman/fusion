@@ -8297,6 +8297,7 @@ describe("TaskCard trailing-row layout (FN-8631)", () => {
         status: "executing" as any,
         steps: [{ name: "Implementation", status: "in-progress" }],
       });
+      const restoredOpenChanges = vi.fn();
       const variants = [
         {
           name: "collapsed progress",
@@ -8325,6 +8326,45 @@ describe("TaskCard trailing-row layout (FN-8631)", () => {
           assert: (container: HTMLElement) => {
             expect(container.querySelector(".card-agent-row")).not.toBeNull();
             expect(container.querySelector(".card-workflow-badge-row")).not.toBeNull();
+          },
+        },
+        {
+          name: "restored completed history",
+          renderCard: () => {
+            useTaskDiffStatsMock.mockReturnValue({ stats: { filesChanged: 3, additions: 8, deletions: 2 }, loading: false });
+            return render(
+              <CostBadgeProvider value={{ enabled: true }}>
+                <TaskCard
+                  task={makeTask({
+                    id: `FN-restored-${width}`,
+                    column: "done",
+                    cumulativeActiveMs: 30 * 60_000,
+                    tokenUsage: {
+                      inputTokens: 1_000_000,
+                      outputTokens: 0,
+                      cachedTokens: 0,
+                      cacheWriteTokens: 0,
+                      totalTokens: 1_000_000,
+                      firstUsedAt: "2026-01-01T00:00:00Z",
+                      lastUsedAt: "2026-01-01T00:30:00Z",
+                      modelProvider: "openai",
+                      modelId: "gpt-5-mini",
+                    },
+                    mergeDetails: { commitSha: "restored-sha", filesChanged: 99 },
+                  })}
+                  onOpenDetail={noop}
+                  onOpenDetailWithTab={restoredOpenChanges}
+                  addToast={noop}
+                />
+              </CostBadgeProvider>,
+            );
+          },
+          assert: (container: HTMLElement) => {
+            expect(container.querySelector(".card-time-indicator")).toHaveTextContent("30m");
+            expect(container.querySelector(".card-cost-indicator")).toHaveTextContent("$0.25");
+            const files = screen.getByRole("button", { name: "3 files changed" });
+            fireEvent.click(files);
+            expect(restoredOpenChanges).toHaveBeenCalledWith(expect.objectContaining({ id: `FN-restored-${width}` }), "changes");
           },
         },
       ];

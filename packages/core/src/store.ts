@@ -163,7 +163,8 @@ import type { TaskDeleteAuditContext } from "./task-delete-attribution.js";
 import { updateSettingsImpl, updateGlobalSettingsImpl } from "./task-store/settings-ops.js";
 import { createTaskBackendImpl, _createTaskInternalBackendImpl, createTaskImpl, createTaskWithReservedIdImpl, _createTaskInternalImpl, _resolveSameAgentDuplicateIntakeImpl } from "./task-store/task-creation.js";
 import { getTaskImpl, listCompletedTasksImpl, listTasksImpl, searchTasksImpl, listTasksModifiedSinceImpl, getTaskVerificationRequestAsyncImpl, listTaskRecommendationsImpl, findTaskByProposalClaimIdImpl, listTasksBySourceLineageImpl, type ListTasksOptions } from "./task-store/reads.js";
-import { reconcileArchivedTasksIntoDonePass, type ArchivedTaskReintegrationResult } from "./task-store/archive-reintegration.js";
+import { drainArchivedTasksIntoDone, inspectArchivedTaskHistory, type ArchivedTaskHistoryInspection, type ArchivedTaskReintegrationResult } from "./task-store/archive-reintegration.js";
+import { supplementTaskHistoryFromEvidence, type SupplementTaskHistoryResult } from "./task-store/async/async-archive-lineage.js";
 import type { TaskColumnSortMode } from "./tasks/task-priority.js";
 import { updateTaskUnlockedImpl } from "./task-store/task-update.js";
 import { __setTaskActivityLogLimitsForTesting } from "./task-store/comments.js";
@@ -803,8 +804,8 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   public reconcileDistributedTaskIdStateOnOpen(): void {
     return reconcileDistributedTaskIdStateOnOpenImpl(this);
   }
-  async init(): Promise<void> {
-    return initImpl(this);
+  async init(options?: { skipArchiveReintegration?: boolean }): Promise<void> {
+    return initImpl(this, options);
   }
 
   // ── Row <-> Task Conversion ────────────────────────────────────────
@@ -1716,9 +1717,31 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   async listCompletedTasks(options?: { limit?: number; offset?: number; slim?: boolean; sort?: TaskColumnSortMode }): Promise<{ tasks: Task[]; total: number; hasMore: boolean }> {
     return listCompletedTasksImpl(this, options);
   }
-  /** @internal One bounded migration pass consumed by engine self-healing and store-open recovery. */
+  /** Read-only archive inventory for project-scoped operational reconciliation. */
+  async inspectArchivedTaskHistory(): Promise<ArchivedTaskHistoryInspection> {
+    return inspectArchivedTaskHistory(this);
+  }
+  /** Read a retained compatibility artifact without allowing it to supersede PostgreSQL. */
+  async readTaskHistoryArtifact(id: string): Promise<Task | undefined> {
+    try {
+      const raw = await readFile(join(this.taskDir(id), "task.json"), "utf8");
+      return this.normalizeTaskFromDisk(JSON.parse(raw) as Task);
+    } catch {
+      return undefined;
+    }
+  }
+  /** Fill only absent historical columns from exact structured repair evidence. */
+  async supplementTaskHistoryFromEvidence(
+    id: string,
+    evidence: Partial<Task>,
+    options?: { dryRun?: boolean },
+  ): Promise<SupplementTaskHistoryResult> {
+    if (!this.asyncLayer?.projectId?.trim()) throw new Error("Task history repair requires an exact project identity");
+    return supplementTaskHistoryFromEvidence(this.asyncLayer, id, evidence, options);
+  }
+  /** @internal Cooperative full drain consumed by engine startup and maintenance recovery. */
   async reconcileArchivedTasksIntoDone(options?: { limit?: number; maxFailureAttempts?: number }): Promise<ArchivedTaskReintegrationResult> {
-    return reconcileArchivedTasksIntoDonePass(this, options);
+    return drainArchivedTasksIntoDone(this, options);
   }
 
 /** Residual B (U13/U9): per-branch progress snapshots for the given tasks, */
@@ -3679,7 +3702,7 @@ Issue #2149 requires read-only type filtering to occur in the file-store before 
   /** @internal Legacy cold-storage reader used only by startup archive reintegration. */
   public async restoreFromArchive(
     entry: import("./types.js").ArchivedTaskEntry,
-    options?: { targetColumn?: string; now?: string },
+    options?: { targetColumn?: string; now?: string; authoritativeTask?: Task },
   ): Promise<Task> {
     return restoreFromArchiveImpl(this, entry, options);
   }
