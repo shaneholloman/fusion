@@ -207,6 +207,51 @@ describe("TaskContextMenu shared task action model", () => {
     expect(onDelete).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps action markup unchanged when optional test and pressed metadata is absent", () => {
+    render(<TaskContextMenu actions={[{ id: "plain", label: "Plain action" }]} />);
+
+    const action = screen.getByRole("menuitem", { name: "Plain action" });
+    expect(action).not.toHaveAttribute("data-testid");
+    expect(action).not.toHaveAttribute("aria-pressed");
+  });
+
+  it("forwards test ids to action and note items without making notes selectable", () => {
+    const onActionSelect = vi.fn();
+    const onNoteSelect = vi.fn();
+    render(
+      <TaskContextMenu
+        actions={[
+          { id: "action", label: "Action", testId: "menu-action" },
+          { id: "note", label: "Section heading", tone: "note", testId: "menu-note", onSelect: onNoteSelect },
+        ]}
+        onActionSelect={onActionSelect}
+      />,
+    );
+
+    expect(screen.getByTestId("menu-action")).toHaveRole("menuitem", { name: "Action" });
+    const note = screen.getByTestId("menu-note");
+    expect(note).toHaveRole("note");
+    fireEvent.click(note);
+    expect(onActionSelect).not.toHaveBeenCalled();
+    expect(onNoteSelect).not.toHaveBeenCalled();
+  });
+
+  it("renders aria-pressed only when an action descriptor defines pressed", () => {
+    render(
+      <TaskContextMenu
+        actions={[
+          { id: "on", label: "On", pressed: true },
+          { id: "off", label: "Off", pressed: false },
+          { id: "unset", label: "Unset" },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("menuitem", { name: "On" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("menuitem", { name: "Off" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("menuitem", { name: "Unset" })).not.toHaveAttribute("aria-pressed");
+  });
+
   it("selects enabled touch menu items on pointer release exactly once", () => {
     const onPause = vi.fn();
     const onActionSelect = vi.fn();

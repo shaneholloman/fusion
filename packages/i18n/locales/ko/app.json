@@ -7827,7 +7827,9 @@
   },
   "taskDetail": {
     "actions": {
-      "menuBtn": "작업"
+      "menuBtn": "작업",
+      "oversightHeading": "",
+      "priorityHeading": ""
     },
     "agent": {
       "assignBtn": "에이전트 할당",

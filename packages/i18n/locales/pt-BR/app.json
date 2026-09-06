@@ -7838,7 +7838,9 @@
   },
   "taskDetail": {
     "actions": {
-      "menuBtn": "Ações"
+      "menuBtn": "Ações",
+      "oversightHeading": "",
+      "priorityHeading": ""
     },
     "agent": {
       "assignBtn": "Atribuir agente",

@@ -7854,7 +7854,9 @@
   },
   "taskDetail": {
     "actions": {
-      "menuBtn": "Actions"
+      "menuBtn": "Actions",
+      "oversightHeading": "Oversight: {{state}}",
+      "priorityHeading": "Priority"
     },
     "agent": {
       "assignBtn": "Assign Agent",

@@ -1,10 +1,6 @@
 /*
-FNXC:PlannerOversight 2026-07-05-00:00:
-FN-7604 — the footer "Actions" dropdown button name is matched EXACTLY
-(`{ name: "Actions" }`) throughout this file, not via a loose `/actions/i`
-regex. The now-universal Oversight overflow trigger's aria-label is
-"Oversight actions", which also matches `/actions/i` and made every such
-query ambiguous once the trigger stopped being a mobile-only affordance.
+FNXC:TaskDetailFooterActions 2026-09-05-23:27:
+FN-300 keeps one footer Actions trigger and moves Quick Add controls into its labeled list. Match the trigger by its exact accessible name so action items with descriptive labels cannot make menu-opening queries ambiguous.
 */
 import { useState } from "react";
 import { describe, it, expect, vi } from "vitest";
@@ -1595,7 +1591,7 @@ describe("TaskDetailModal", () => {
         <TaskDetailModal
           task={makeTask({ id: "FN-001", column: "done" })}
           projectId="project-1"
-          initialTab="definition"
+          initialTab="details"
           onClose={onClose}
           onDeleteTask={noopDelete}
           onMergeTask={noopMerge}

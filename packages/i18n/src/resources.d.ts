@@ -8037,7 +8037,9 @@ export default interface Resources {
     },
     "taskDetail": {
       "actions": {
-        "menuBtn": "Actions"
+        "menuBtn": "Actions",
+        "oversightHeading": "Oversight: {{state}}",
+        "priorityHeading": "Priority"
       },
       "ageStaleness": {
         "active": "Active",

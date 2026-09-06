@@ -7827,7 +7827,9 @@
   },
   "taskDetail": {
     "actions": {
-      "menuBtn": "操作"
+      "menuBtn": "操作",
+      "oversightHeading": "",
+      "priorityHeading": ""
     },
     "agent": {
       "assignBtn": "分配代理",

@@ -2,15 +2,9 @@
 FNXC:TaskDetailTabs 2026-06-17-08:20:
 FN-7306 labels the stable internal `chat` tab as Activity and keeps it as the default TaskDetailModal tab. Tests that assert Definition-only sections must opt into `initialTab="definition"` so they verify the intended surface instead of the Activity landing state.
 
-FNXC:PlannerOversight 2026-07-05-00:00:
-FN-7604 — the footer "Actions" dropdown button name is matched EXACTLY
-(`{ name: "Actions" }`) throughout this file, not via a loose `/actions/i`
-regex. The now-universal Oversight overflow trigger's aria-label is
-"Oversight actions", which also matches `/actions/i` and made every such
-query ambiguous once the trigger stopped being a mobile-only affordance.
+FNXC:TaskDetailFooterActions 2026-09-05-23:27:
+FN-300 keeps one footer Actions trigger and moves Quick Add controls into its labeled list. Match the trigger by its exact accessible name so action items with descriptive labels cannot make menu-opening queries ambiguous.
 */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor, cleanup, within } from "@testing-library/react";
 
@@ -99,7 +93,7 @@ describe("TaskDetailModal", () => {
   Definition ticks must not publish a full task snapshot. Drive repeated planning ticks against
   the production detail host and preserve the queued lifecycle and resolved workflow badge node.
   */
-  it("keeps queued lifecycle and workflow badge continuous across prompt-only ticks", async () => {
+  it("keeps queued lifecycle and workflow badge continuous across active Details ticks", async () => {
     vi.useFakeTimers();
     try {
       vi.mocked(dashboardApi.fetchBoardWorkflows).mockResolvedValue({
@@ -110,7 +104,7 @@ describe("TaskDetailModal", () => {
       promptFetch.mockResolvedValue({ id: "FN-POLL", prompt: "# Updated definition" });
       const fullFetch = vi.mocked(dashboardApi.fetchTaskDetail);
       const queued = makeTask({ id: "FN-POLL", column: "in-progress", status: "queued", prompt: "# Initial definition", workflowStepResults: [{ workflowStepId: "plan-review", status: "running", startedAt: "2026-08-05T00:00:00.000Z" }] });
-      render(<TaskDetailContent embedded active initialTab="definition" task={queued} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+      render(<TaskDetailContent embedded active initialTab="details" task={queued} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
 
       await act(async () => {});
       const badge = screen.getByTestId("task-detail-workflow-badge");
@@ -119,11 +113,10 @@ describe("TaskDetailModal", () => {
       for (let tick = 1; tick <= 3; tick++) {
         await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
         expect(fullFetch).not.toHaveBeenCalled();
-        expect(promptFetch).toHaveBeenCalledTimes(initialPromptRequests + tick);
+        expect(promptFetch).toHaveBeenCalledTimes(initialPromptRequests);
         expect(document.querySelector(".detail-column-badge")).toHaveClass("badge-in-progress");
         expect(screen.getByTestId("task-detail-workflow-badge")).toBe(badge);
       }
-      expect(screen.getByText("Updated definition")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -135,7 +128,7 @@ describe("TaskDetailModal", () => {
   applicable Actions control mounted through every narrow response so the fix cannot merely hide the
   queued Todo rollback while completed-task controls still flash.
   */
-  it("keeps done workflow badge and action controls continuous across prompt-only ticks", async () => {
+  it("keeps done workflow badge and action controls continuous across active Details ticks", async () => {
     vi.useFakeTimers();
     try {
       vi.mocked(dashboardApi.fetchBoardWorkflows).mockResolvedValue({
@@ -144,7 +137,7 @@ describe("TaskDetailModal", () => {
       });
       vi.mocked(dashboardApi.fetchTaskPrompt).mockResolvedValue({ id: "FN-DONE-POLL", prompt: "# Refreshed definition" });
       const done = makeTask({ id: "FN-DONE-POLL", column: "done", status: "done", prompt: "# Original definition", workflowStepResults: [{ workflowStepId: "plan-review", status: "running", startedAt: "2026-08-05T00:00:00.000Z" }] });
-      render(<TaskDetailContent embedded active initialTab="definition" task={done} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+      render(<TaskDetailContent embedded active initialTab="details" task={done} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
 
       await act(async () => {});
       const badge = screen.getByTestId("task-detail-workflow-badge");
@@ -153,7 +146,7 @@ describe("TaskDetailModal", () => {
       for (let tick = 1; tick <= 3; tick++) {
         await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
         expect(dashboardApi.fetchTaskDetail).not.toHaveBeenCalled();
-        expect(dashboardApi.fetchTaskPrompt).toHaveBeenCalledTimes(initialPromptRequests + tick);
+        expect(dashboardApi.fetchTaskPrompt).toHaveBeenCalledTimes(initialPromptRequests);
         expect(screen.getByTestId("task-detail-workflow-badge")).toBe(badge);
         expect(screen.getByRole("button", { name: "Actions" })).toBe(actions);
       }
@@ -175,7 +168,7 @@ describe("TaskDetailModal", () => {
       .mockResolvedValueOnce(payload)
       .mockImplementationOnce(() => new Promise<typeof payload>((resolve) => { settleColumnMove = resolve; }));
     const task = makeTask({ id: "FN-COLUMN-MOVE", column: "in-progress", status: "queued" });
-    const props = { embedded: true, active: true, initialTab: "definition" as const, onDeleteTask: noopDelete, onMergeTask: noopMerge, onOpenDetail: noopOpenDetail, addToast: noop };
+    const props = { embedded: true, active: true, initialTab: "details" as const, onDeleteTask: noopDelete, onMergeTask: noopMerge, onOpenDetail: noopOpenDetail, addToast: noop };
     const { rerender } = render(<TaskDetailContent {...props} task={task} />);
 
     const badge = await screen.findByTestId("task-detail-workflow-badge");
@@ -216,7 +209,7 @@ describe("TaskDetailModal", () => {
     vi.mocked(dashboardApi.fetchBoardWorkflows).mockImplementationOnce(() => new Promise((resolve) => {
       resolveRevalidation = resolve;
     }));
-    render(<TaskDetailContent embedded active task={makeTask({ id: "FN-workflow-revision", column: "todo" })} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+    render(<TaskDetailContent embedded active initialTab="details" task={makeTask({ id: "FN-workflow-revision", column: "todo" })} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
 
     expect(await screen.findByText("Coding")).toBeInTheDocument();
     const badge = screen.getByTestId("task-detail-workflow-badge");
@@ -263,7 +256,7 @@ describe("TaskDetailModal", () => {
     function renderDetail(task = makeTask({ id: "FN-101", column: "todo", title: "Docs task" })) {
       return render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={task}
           onClose={noop}
 
@@ -316,7 +309,7 @@ describe("TaskDetailModal", () => {
         .mockResolvedValueOnce(workflowPayload)
         .mockResolvedValueOnce(workflowPayload);
       const props = {
-        initialTab: "definition" as const,
+        initialTab: "details" as const,
         task: makeTask({ id: "FN-101", column: "todo", title: "Docs task" }),
 
         onDeleteTask: noopDelete,
@@ -329,6 +322,7 @@ describe("TaskDetailModal", () => {
       expect(await screen.findByTestId("task-detail-workflow-badge")).toHaveTextContent("Docs");
 
       rerender(<TaskDetailContent {...props} task={makeTask({ id: "FN-default", column: "in-review", title: "Coding task" })} embedded onRequestClose={noop} />);
+      fireEvent.click(screen.getByRole("button", { name: "Details" }));
       await waitFor(() => expect(screen.getByTestId("task-detail-workflow-badge")).toHaveTextContent("Coding"));
     });
 
@@ -340,7 +334,7 @@ describe("TaskDetailModal", () => {
           resolveNextPayload = resolve;
         }));
       const props = {
-        initialTab: "definition" as const,
+        initialTab: "details" as const,
         task: makeTask({ id: "FN-101", column: "todo", title: "Docs task" }),
 
         onDeleteTask: noopDelete,
@@ -353,6 +347,7 @@ describe("TaskDetailModal", () => {
       expect(await screen.findByTestId("task-detail-workflow-badge")).toHaveTextContent("Docs");
 
       rerender(<TaskDetailContent {...props} task={makeTask({ id: "FN-default", column: "in-review", title: "Coding task" })} embedded onRequestClose={noop} />);
+      fireEvent.click(screen.getByRole("button", { name: "Details" }));
       await waitFor(() => expect(dashboardApi.fetchBoardWorkflows).toHaveBeenCalledTimes(2));
       expect(screen.queryByTestId("task-detail-workflow-badge")).toBeNull();
 
@@ -382,7 +377,7 @@ describe("TaskDetailModal", () => {
 
       const { container } = render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           mobileHeaderMode="back"
           task={makeTask({ id: "FN-101", column: "todo", title: "Docs task" })}
           onClose={noop}
@@ -517,7 +512,7 @@ describe("TaskDetailModal", () => {
     ] as const)("renders provenance text for %s", (sourceType, sourceAgentId, expectedText) => {
       render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({ sourceType, sourceAgentId })}
           onClose={noop}
 
@@ -542,7 +537,7 @@ describe("TaskDetailModal", () => {
     ] as const)("renders parent task link for %s", async (_label, sourceType, parentId, expectedText) => {
       render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({ sourceType, sourceParentTaskId: parentId })}
           onClose={noop}
 
@@ -568,7 +563,7 @@ describe("TaskDetailModal", () => {
     ] as const)("links only the GitHub Import label to the source issue on %s markup", (_layout, mobileHeaderMode) => {
       const { container } = render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           mobileHeaderMode={mobileHeaderMode}
           task={makeTask({
             sourceType: "github_import",
@@ -599,7 +594,7 @@ describe("TaskDetailModal", () => {
     it("keeps GitHub Import as the sole link for a populated nonstandard source URL", () => {
       render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({
             sourceType: "github_import",
             sourceMetadata: { issueUrl: "https://example.com/something" },
@@ -624,7 +619,7 @@ describe("TaskDetailModal", () => {
     it("renders a URL-absent GitHub import as plain text without a link shell", () => {
       const { container, rerender } = render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({ sourceType: "github_import", sourceMetadata: undefined })}
           onClose={noop}
 
@@ -645,7 +640,7 @@ describe("TaskDetailModal", () => {
       assertPlainFallback();
       rerender(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({ sourceType: "github_import", sourceMetadata: {} })}
           onClose={noop}
 
@@ -661,7 +656,7 @@ describe("TaskDetailModal", () => {
     it("renders finding label for research provenance", () => {
       render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({
             sourceType: "research",
             sourceMetadata: {
@@ -686,7 +681,7 @@ describe("TaskDetailModal", () => {
     it("falls back to run id for research provenance context", () => {
       render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({
             sourceType: "research",
             sourceMetadata: { runId: "RR-456" },
@@ -708,7 +703,7 @@ describe("TaskDetailModal", () => {
     it.each(["unknown", undefined] as const)("omits provenance for %s source", (sourceType) => {
       render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({ sourceType })}
           onClose={noop}
 
@@ -735,7 +730,7 @@ describe("TaskDetailModal", () => {
       it("renders a clickable 'Created to undo <id>' link for an AI-undo task", async () => {
         render(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={makeTask({ id: "FN-200", sourceType: "recovery", sourceMetadata: { revertOf: "FN-100" } })}
             onClose={noop}
 
@@ -758,7 +753,7 @@ describe("TaskDetailModal", () => {
       it("renders nothing for the forward link when sourceMetadata.revertOf is absent", () => {
         render(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={makeTask({ id: "FN-200", sourceType: "recovery", sourceMetadata: {} })}
             onClose={noop}
 
@@ -775,7 +770,7 @@ describe("TaskDetailModal", () => {
       it("does not throw and renders nothing for malformed revertOf metadata", () => {
         render(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={makeTask({ id: "FN-200", sourceMetadata: { revertOf: 999 as any } })}
             onClose={noop}
 
@@ -795,7 +790,7 @@ describe("TaskDetailModal", () => {
 
         render(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={sourceTask}
             tasks={[sourceTask, undoTask]}
             onClose={noop}
@@ -821,7 +816,7 @@ describe("TaskDetailModal", () => {
 
         render(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={sourceTask}
             tasks={[sourceTask, doneUndoTask]}
             onClose={noop}
@@ -842,7 +837,7 @@ describe("TaskDetailModal", () => {
 
         const { container } = render(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={sourceTask}
             tasks={[sourceTask]}
             onClose={noop}
@@ -864,7 +859,7 @@ describe("TaskDetailModal", () => {
 
         render(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={sourceTask}
             tasks={[sourceTask, olderUndo, newerUndo]}
             onClose={noop}
@@ -884,7 +879,7 @@ describe("TaskDetailModal", () => {
     it("FN-3755 renders provenance before created-updated timestamps", () => {
       const { container } = render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({ sourceType: "dashboard_ui" })}
           onClose={noop}
 
@@ -903,10 +898,10 @@ describe("TaskDetailModal", () => {
       expect(provenance?.compareDocumentPosition(timestamps as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
-    it("keeps inline controls, provenance, and timestamps as direct detail-meta children", () => {
+    it("groups provenance and timestamps in the Details metadata section without inline controls", () => {
       const { container } = render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({ sourceType: "task_refine", sourceParentTaskId: "FN-001" })}
           onClose={noop}
 
@@ -917,21 +912,20 @@ describe("TaskDetailModal", () => {
         />,
       );
 
-      const meta = document.querySelector(".detail-meta");
-      const controls = document.querySelector(".detail-meta-inline-controls");
+      const metadataSection = document.querySelector(".detail-section--task-metadata");
       const provenance = screen.getByText(/Created via Refinement/).closest(".detail-provenance");
       const timestamps = document.querySelector(".detail-timestamps");
 
-      expect(meta).toBeTruthy();
-      expect(controls?.parentElement).toBe(meta);
-      expect(provenance?.parentElement).toBe(meta);
-      expect(timestamps?.parentElement).toBe(meta);
+      expect(metadataSection).toBeTruthy();
+      expect(document.querySelector(".detail-meta-inline-controls")).toBeNull();
+      expect(provenance?.parentElement).toBe(metadataSection);
+      expect(timestamps?.parentElement).toBe(metadataSection);
     });
 
-    it("keeps the optional PR link row in the same detail-meta row as provenance and timestamps", () => {
+    it("keeps the optional PR link with provenance and timestamps in Details metadata", () => {
       const { container } = render(
         <TaskDetailModal
-          initialTab="definition"
+          initialTab="details"
           task={makeTask({
             sourceType: "dashboard_ui",
             prInfo: { number: 42, url: "https://github.com/owner/repo/pull/42" },
@@ -945,17 +939,16 @@ describe("TaskDetailModal", () => {
         />,
       );
 
-      const meta = document.querySelector(".detail-meta");
-      const controls = document.querySelector(".detail-meta-inline-controls");
+      const metadataSection = document.querySelector(".detail-section--task-metadata");
       const provenance = screen.getByText("Created via Dashboard").closest(".detail-provenance");
       const prRow = document.querySelector(".detail-pr-link-row");
       const timestamps = document.querySelector(".detail-timestamps");
 
-      expect(meta).toBeTruthy();
-      expect(controls?.parentElement).toBe(meta);
-      expect(provenance?.parentElement).toBe(meta);
-      expect(prRow?.parentElement).toBe(meta);
-      expect(timestamps?.parentElement).toBe(meta);
+      expect(metadataSection).toBeTruthy();
+      expect(document.querySelector(".detail-meta-inline-controls")).toBeNull();
+      expect(provenance?.parentElement).toBe(metadataSection);
+      expect(prRow?.parentElement).toBe(metadataSection);
+      expect(timestamps?.parentElement).toBe(metadataSection);
     });
 
     describe("compact timestamp metadata", () => {
@@ -971,7 +964,7 @@ describe("TaskDetailModal", () => {
       it("renders compact relative timestamps for recent tasks", () => {
         render(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={makeTask({
               sourceType: "dashboard_ui",
               createdAt: "2026-05-09T12:00:00.000Z",
@@ -1003,7 +996,7 @@ describe("TaskDetailModal", () => {
       it("preserves byte-identical timestamp buckets and edge cases", () => {
         const { rerender } = render(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={makeTask({
               sourceType: "dashboard_ui",
               createdAt: "2026-05-11T11:59:30.000Z",
@@ -1024,7 +1017,7 @@ describe("TaskDetailModal", () => {
 
         rerender(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={makeTask({
               sourceType: "dashboard_ui",
               createdAt: "not-a-date",
@@ -1045,7 +1038,7 @@ describe("TaskDetailModal", () => {
 
         rerender(
           <TaskDetailModal
-            initialTab="definition"
+            initialTab="details"
             task={makeTask({
               sourceType: "dashboard_ui",
               createdAt: "2026-05-01T12:00:00.000Z",
@@ -1638,47 +1631,34 @@ describe("TaskDetailModal", () => {
     expect(screen.getByText(/No review items yet\./i)).toBeTruthy();
   });
 
-  describe("inline action row icon-only controls", () => {
-    it("renders priority and Fast controls as accessible icon-only Quick Add buttons", () => {
-      render(<TaskDetailModal initialTab="definition" task={makeTask({ column: "todo", priority: "high", executionMode: "fast" })} onClose={noop} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
-      const priority = screen.getByTestId("detail-priority-trigger");
-      const fast = screen.getByRole("button", { name: "Execution mode: fast" });
-      expect(priority).toHaveClass("btn", "btn-icon", "btn-sm");
-      expect(priority).toHaveAttribute("title", "Priority: High");
-      expect(fast).toHaveClass("btn", "btn-icon", "btn-sm", "btn-primary");
-      expect(fast).toHaveAttribute("title", "Execution mode: fast");
-      expect(fast).not.toHaveTextContent("Fast");
+  describe("footer quick actions", () => {
+    it("renders Priority and Fast as labeled Actions menu items with selected state", async () => {
+      render(<TaskDetailModal initialTab="details" task={makeTask({ column: "todo", priority: "high", executionMode: "fast" })} onClose={noop} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+      fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+
+      const priority = screen.getByTestId("detail-priority-option-high");
+      const fast = screen.getByTestId("detail-execution-mode-toggle");
+      expect(priority).toHaveTextContent("High");
+      expect(priority).toHaveAttribute("aria-pressed", "true");
+      expect(fast).toHaveAccessibleName("Execution mode: fast");
+      expect(fast).toHaveAttribute("aria-pressed", "true");
     });
 
-    it("keeps every inline action icon-only with the production size-prop contracts", () => {
-      const source = readFileSync(resolve(__dirname, "../TaskDetailModal.tsx"), "utf8");
-      const rowStart = source.indexOf('data-testid="detail-meta-inline-controls"');
-      const rowEnd = source.indexOf('className="detail-hidden-file-input"', rowStart);
-      const row = source.slice(rowStart, rowEnd);
+    it("keeps Attach, GitHub, Oversight, Priority, and Fast in Quick Add order", async () => {
+      render(<TaskDetailModal initialTab="details" task={makeTask({ column: "todo", plannerOversightLevel: "observe" })} onClose={noop} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+      fireEvent.click(screen.getByRole("button", { name: "Actions" }));
 
-      // FNXC:TaskDetailModalResponsive 2026-07-19-12:00: The row stays ordered
-      // attach → GitHub → Oversight → priority → Fast; CSS owns icon parity.
-      expect(row).toMatch(/<Paperclip size=\{12\}[^>]*aria-hidden="true"/);
-      expect(row).toMatch(/<ProviderIcon provider="github" size="sm"/);
-      expect(row).toMatch(/<PriorityIcon size=\{14\}[^>]*aria-hidden="true"/);
-      expect(row).toMatch(/<Zap size=\{14\}[^>]*aria-hidden="true"/);
-      expect(row).toMatch(/overseerTriggerOn \? <Eye aria-hidden="true"\s*\/> : <EyeOff aria-hidden="true"\s*\/>/);
-      expect(row).not.toMatch(/<(?:Eye|EyeOff)\s+[^>]*\bsize=/);
-      expect(row.indexOf("detail-inline-attach")).toBeLessThan(row.indexOf("detail-inline-github-toggle"));
-      expect(row.indexOf("detail-inline-github-toggle")).toBeLessThan(row.indexOf("detail-oversight-menu-trigger"));
-      expect(row.indexOf("detail-oversight-menu-trigger")).toBeLessThan(row.indexOf("detail-priority-trigger"));
-      expect(row.indexOf("detail-priority-trigger")).toBeLessThan(row.indexOf("detail-execution-mode-toggle"));
-      // FNXC:QuickAddActionRow 2026-07-20-12:00: Every test-id affordance must
-      // also carry its FN-8287 sizing class, including optional GitHub and
-      // Oversight surfaces, so mounted tablet controls share one compact box.
-      expect(row).toMatch(/className="btn btn-icon btn-sm detail-inline-attach"/);
-      expect(row).toMatch(/className=\{`btn btn-icon btn-sm detail-inline-github-toggle/);
-      expect(row).toMatch(/className="btn btn-icon btn-sm detail-oversight-menu-trigger"/);
-      expect(row).toMatch(/className="btn btn-icon btn-sm detail-priority-trigger"/);
-      expect(row).toMatch(/className=\{`btn btn-icon btn-sm detail-execution-mode-toggle/);
-      for (const label of ["aria-label", "title"]) {
-        expect(row.match(new RegExp(label, "g"))?.length).toBeGreaterThanOrEqual(5);
+      const orderedItems = [
+        screen.getByTestId("detail-inline-attach"),
+        screen.getByTestId("detail-inline-github-toggle"),
+        screen.getByTestId("detail-actions-oversight-heading"),
+        screen.getByTestId("detail-actions-priority-heading"),
+        screen.getByTestId("detail-execution-mode-toggle"),
+      ];
+      for (let index = 1; index < orderedItems.length; index += 1) {
+        expect(orderedItems[index - 1]?.compareDocumentPosition(orderedItems[index] as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       }
+      expect(document.querySelector(".detail-meta-inline-controls")).toBeNull();
     });
 
     it("removes bespoke toolbar SVG sizing rules", () => {

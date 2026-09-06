@@ -35,8 +35,15 @@ export interface TaskMenuActionDescriptor {
   label: string;
   tone?: TaskMenuActionTone;
   disabled?: boolean;
+  testId?: string;
+  pressed?: boolean;
   onSelect?: () => void;
 }
+
+/*
+FNXC:TaskDetailFooterActions 2026-09-05-23:27:
+Task Detail contributes its relocated quick actions as one flat descriptor list. Do not turn those groups into submenus: the desktop footer menu clips horizontal overflow and the mobile menu scrolls vertically, so a lateral flyout would be clipped and difficult to use by touch.
+*/
 
 /**
  * A non-action menu parent whose children are the selectable menu items.
@@ -534,6 +541,8 @@ export function TaskContextMenu({
                         className={classes.join(" ")}
                         role={role === "menu" ? "menuitem" : undefined}
                         disabled={action.disabled}
+                        data-testid={action.testId}
+                        aria-pressed={action.pressed}
                         onPointerUp={(event) => handleActionPointerUp(event, action)}
                         onClick={(event) => handleActionClick(event, action)}
                       >
@@ -551,9 +560,9 @@ export function TaskContextMenu({
         if (action.tone === "danger") classes.push(dangerItemClassName);
         if (action.tone === "note") classes.push(noteItemClassName);
         const defaultNode = action.tone === "note" ? (
-          <span key={action.id} className={classes.join(" ")} role="note">{action.label}</span>
+          <span key={action.id} className={classes.join(" ")} role="note" data-testid={action.testId}>{action.label}</span>
         ) : (
-          <button key={action.id} type="button" className={classes.join(" ")} role={role === "menu" ? "menuitem" : undefined} disabled={action.disabled} onPointerUp={(event) => handleActionPointerUp(event, action)} onClick={(event) => handleActionClick(event, action)}>{action.label}</button>
+          <button key={action.id} type="button" className={classes.join(" ")} role={role === "menu" ? "menuitem" : undefined} disabled={action.disabled} data-testid={action.testId} aria-pressed={action.pressed} onPointerUp={(event) => handleActionPointerUp(event, action)} onClick={(event) => handleActionClick(event, action)}>{action.label}</button>
         );
         return <Fragment key={action.id}>{renderAction ? renderAction(action, defaultNode) : defaultNode}</Fragment>;
       })}
